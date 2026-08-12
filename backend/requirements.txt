@@ -1,0 +1,6 @@
+# AtmoGraph backend dependencies - Module 1: FastAPI foundation
+#
+# Only packages required for the current module are listed. Future modules
+# (e.g. neo4j, graph tooling) will add their dependencies when implemented.
+fastapi
+uvicorn
