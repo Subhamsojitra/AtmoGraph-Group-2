@@ -1,21 +1,21 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
-import { staticGraphData } from './data';
 
 /**
  * GraphCanvas Component
  * 
  * Renders a force-directed network graph using D3.js.
- * Consumes local static mock/demo dataset representing a supply chain network.
+ * Consumes graph dataset passed via props from the host page.
  * Refined on Day 2 to use ResizeObserver for container-aware responsive sizing
  * and to ensure clean simulation lifecycle cleanup.
+ * Refined on Day 3 to add interactive drag & hover behaviors.
  */
-export default function GraphCanvas() {
+export default function GraphCanvas({ data }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current) return;
+    if (!svgRef.current || !containerRef.current || !data) return;
 
     // Get dynamic width/height from the parent container bounds, falling back to defaults if not set
     const initialWidth = containerRef.current.clientWidth || 800;
@@ -29,8 +29,8 @@ export default function GraphCanvas() {
     svg.selectAll("*").remove();
 
     // Deep copy nodes and links to prevent D3 from mutating original static mock/demo dataset objects
-    const nodes = staticGraphData.nodes.map(d => ({ ...d }));
-    const links = staticGraphData.links.map(d => ({ ...d }));
+    const nodes = data.nodes.map(d => ({ ...d }));
+    const links = data.links.map(d => ({ ...d }));
 
     // Create D3 Force Simulation
     const simulation = d3.forceSimulation(nodes)
@@ -56,7 +56,8 @@ export default function GraphCanvas() {
     const node = gNodes.selectAll("g")
       .data(nodes)
       .enter()
-      .append("g");
+      .append("g")
+      .style("cursor", "grab");
 
     // Render node circles
     node.append("circle")
@@ -82,6 +83,42 @@ export default function GraphCanvas() {
       .style("font-size", "12px")
       .style("fill", "#2d3748")
       .style("user-select", "none");
+
+    // Drag Behavior
+    const drag = d3.drag()
+      .on("start", function(event, d) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+        d3.select(this).style("cursor", "grabbing");
+      })
+      .on("drag", function(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+      })
+      .on("end", function(event, d) {
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+        d3.select(this).style("cursor", "grab");
+      });
+
+    node.call(drag);
+
+    // Hover Interaction
+    node
+      .on("mouseenter", function() {
+        d3.select(this).select("circle")
+          .attr("stroke-width", 3);
+        d3.select(this).select("text")
+          .style("font-weight", "600");
+      })
+      .on("mouseleave", function() {
+        d3.select(this).select("circle")
+          .attr("stroke-width", 1.5);
+        d3.select(this).select("text")
+          .style("font-weight", "normal");
+      });
 
     // Update positions on every tick
     simulation.on("tick", () => {
@@ -121,7 +158,7 @@ export default function GraphCanvas() {
       simulation.stop();
       svg.selectAll("*").remove();
     };
-  }, []);
+  }, [data]);
 
   return (
     <div 
@@ -133,3 +170,4 @@ export default function GraphCanvas() {
     </div>
   );
 }
+

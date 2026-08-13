@@ -1,5 +1,6 @@
 import React from 'react';
 import GraphCanvas from '../graph/GraphCanvas';
+import { staticGraphData } from '../graph/data';
 
 /**
  * DashboardPage Container Scaffold
@@ -11,7 +12,8 @@ export default function DashboardPage() {
   return (
     <div className="dashboard-page-container">
       <h2>AtmoGraph Dashboard Page</h2>
-      <GraphCanvas />
+      <GraphCanvas data={staticGraphData} />
     </div>
   );
 }
+
