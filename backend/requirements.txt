@@ -1,6 +1,14 @@
-# AtmoGraph backend dependencies - Module 1: FastAPI foundation
+# AtmoGraph backend dependencies - Modules 1 & 2
 #
-# Only packages required for the current module are listed. Future modules
+# Only packages required for the current modules are listed. Future modules
 # (e.g. neo4j, graph tooling) will add their dependencies when implemented.
+#
+# Runtime dependencies
 fastapi
 uvicorn
+pydantic
+pydantic-settings
+
+# Test dependencies
+httpx
+pytest
