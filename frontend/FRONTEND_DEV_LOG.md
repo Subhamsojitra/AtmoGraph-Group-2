@@ -6,6 +6,12 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-14 — Day 4: Graph Data & Rendering Robustness
+* **Work completed**: Refactored `GraphCanvas.jsx` to establish a robust, data-driven update lifecycle. Declared persistent React refs for the simulation, ResizeObserver, and SVG sub-groups to prevent redundant object and listener re-creations. Implemented safe nodes and links parsing (filtering null/undefined nodes, and links referencing non-existent nodes) to handle invalid inputs without crashing. Preserved coordinates of existing nodes across data updates to maintain visual layout stability. Used D3's `.join()` API for DOM-element-aware rendering transitions. Verified changes via lint, build, and automated transition testing (standard, empty, and malformed datasets) in browser.
+* **Commit**: *[Pending review]*
+* **Issues/blockers**: None.
+* **Next task**: Week 2 - Replace mock data with backend integration.
+
 ### 2026-08-13 — Day 3: Graph Interaction & Data Boundary
 * **Work completed**: Established a clean data boundary by passing the mock dataset from `DashboardPage.jsx` to `GraphCanvas.jsx` via props. Configured interactive node dragging using `d3.drag()` while preserving D3 force simulation constraints, reheating the simulation during drag and allowing it to settle naturally on release. Added minimal visual hover feedback on nodes (cursor style, node border thickness, and text weight) without modifying the theme colors. Verified workspace cleanliness using oxlint, build, and manual testing.
 * **Commit**: *[Pending review]*

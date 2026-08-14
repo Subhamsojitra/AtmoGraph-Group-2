@@ -6,62 +6,175 @@ import * as d3 from 'd3';
  * 
  * Renders a force-directed network graph using D3.js.
  * Consumes graph dataset passed via props from the host page.
- * Refined on Day 2 to use ResizeObserver for container-aware responsive sizing
- * and to ensure clean simulation lifecycle cleanup.
- * Refined on Day 3 to add interactive drag & hover behaviors.
+ * Refined to use ref-based simulation persistence and D3 data join updates.
  */
 export default function GraphCanvas({ data }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
+  const simulationRef = useRef(null);
+  const resizeObserverRef = useRef(null);
+  const gLinksRef = useRef(null);
+  const gNodesRef = useRef(null);
+
+  // Mount/Unmount cleanup effect
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current || !data) return;
+    const currentSvg = svgRef.current;
+    return () => {
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
+      }
+      if (simulationRef.current) {
+        simulationRef.current.stop();
+        simulationRef.current = null;
+      }
+      if (currentSvg) {
+        d3.select(currentSvg).selectAll("*").remove();
+      }
+    };
+  }, []);
 
-    // Get dynamic width/height from the parent container bounds, falling back to defaults if not set
-    const initialWidth = containerRef.current.clientWidth || 800;
-    const initialHeight = containerRef.current.clientHeight || 500;
+  // Data update and initialization effect
+  useEffect(() => {
+    if (!svgRef.current || !containerRef.current) return;
 
-    const svg = d3.select(svgRef.current)
-      .attr("width", initialWidth)
-      .attr("height", initialHeight);
+    let svg = d3.select(svgRef.current);
+    let simulation = simulationRef.current;
+    let gLinks, gNodes;
 
-    // Clear previous contents of the SVG container to prevent duplicate drawings
-    svg.selectAll("*").remove();
+    // First-time setup of SVG structural groups, simulation and ResizeObserver
+    if (!simulation) {
+      const initialWidth = containerRef.current.clientWidth || 800;
+      const initialHeight = containerRef.current.clientHeight || 500;
 
-    // Deep copy nodes and links to prevent D3 from mutating original static mock/demo dataset objects
-    const nodes = data.nodes.map(d => ({ ...d }));
-    const links = data.links.map(d => ({ ...d }));
+      svg.attr("width", initialWidth).attr("height", initialHeight);
 
-    // Create D3 Force Simulation
-    const simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(120))
-      .force("charge", d3.forceManyBody().strength(-300))
-      .force("center", d3.forceCenter(initialWidth / 2, initialHeight / 2))
-      .force("collide", d3.forceCollide().radius(40));
+      // Create static containers once
+      gLinks = svg.append("g").attr("class", "links");
+      gNodes = svg.append("g").attr("class", "nodes");
 
-    // Groups for layout layering (links behind nodes)
-    const gLinks = svg.append("g").attr("class", "links");
-    const gNodes = svg.append("g").attr("class", "nodes");
+      gLinksRef.current = gLinks;
+      gNodesRef.current = gNodes;
 
-    // Draw links
+      // Create D3 Force Simulation
+      simulation = d3.forceSimulation()
+        .force("link", d3.forceLink().id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-300))
+        .force("center", d3.forceCenter(initialWidth / 2, initialHeight / 2))
+        .force("collide", d3.forceCollide().radius(40));
+
+      simulationRef.current = simulation;
+
+      // Initialize ResizeObserver
+      const resizeObserver = new ResizeObserver((entries) => {
+        if (!entries || entries.length === 0) return;
+        const width = entries[0].contentRect.width || containerRef.current.clientWidth || 800;
+        const height = entries[0].contentRect.height || containerRef.current.clientHeight || 500;
+
+        // Update SVG canvas bounds
+        svg.attr("width", width).attr("height", height);
+
+        // Re-center force coordinates
+        simulation.force("center", d3.forceCenter(width / 2, height / 2));
+
+        // Re-heat simulation to adjust layout smoothly
+        simulation.alpha(0.3).restart();
+      });
+
+      resizeObserver.observe(containerRef.current);
+      resizeObserverRef.current = resizeObserver;
+    } else {
+      gLinks = gLinksRef.current;
+      gNodes = gNodesRef.current;
+    }
+
+    // Process nodes and links data safely (basic robustness)
+    const safeNodes = data?.nodes || [];
+    const safeLinks = data?.links || [];
+
+    // Map new nodes, preserving coordinates from existing nodes to avoid jarring jumps
+    const previousNodes = simulation.nodes() || [];
+    const previousNodesMap = new Map(previousNodes.map(n => [n.id, n]));
+
+    const nodes = safeNodes
+      .filter(n => n && n.id !== undefined && n.id !== null)
+      .map(d => {
+        const prev = previousNodesMap.get(d.id);
+        if (prev) {
+          return {
+            ...d,
+            x: prev.x,
+            y: prev.y,
+            vx: prev.vx,
+            vy: prev.vy,
+            fx: prev.fx,
+            fy: prev.fy
+          };
+        }
+        return { ...d };
+      });
+
+    const nodeIds = new Set(nodes.map(n => n.id));
+
+    // Map links, validating both source and target references exist in nodeIds
+    const links = safeLinks
+      .filter(l => {
+        if (!l || l.source === undefined || l.source === null || l.target === undefined || l.target === null) return false;
+        const sourceId = (l.source && typeof l.source === 'object') ? l.source.id : l.source;
+        const targetId = (l.target && typeof l.target === 'object') ? l.target.id : l.target;
+        return nodeIds.has(sourceId) && nodeIds.has(targetId);
+      })
+      .map(d => {
+        const sourceId = (d.source && typeof d.source === 'object') ? d.source.id : d.source;
+        const targetId = (d.target && typeof d.target === 'object') ? d.target.id : d.target;
+        return {
+          ...d,
+          source: sourceId,
+          target: targetId
+        };
+      });
+
+    // Draw links using data join
     const link = gLinks.selectAll("line")
-      .data(links)
-      .enter()
-      .append("line")
+      .data(links, d => {
+        const s = (d.source && typeof d.source === 'object') ? d.source.id : d.source;
+        const t = (d.target && typeof d.target === 'object') ? d.target.id : d.target;
+        return `${s}->${t}`;
+      })
+      .join("line")
       .attr("stroke", "#999")
       .attr("stroke-opacity", 0.6)
       .attr("stroke-width", 2);
 
-    // Draw node groups (circle + label)
-    const node = gNodes.selectAll("g")
-      .data(nodes)
-      .enter()
-      .append("g")
-      .style("cursor", "grab");
+    // Draw node groups using data join
+    const node = gNodes.selectAll("g.node-group")
+      .data(nodes, d => d.id)
+      .join(
+        enter => {
+          const g = enter.append("g")
+            .attr("class", "node-group")
+            .style("cursor", "grab");
 
-    // Render node circles
-    node.append("circle")
-      .attr("r", 15)
+          g.append("circle")
+            .attr("r", 15)
+            .attr("stroke", "#fff")
+            .attr("stroke-width", 1.5);
+
+          g.append("text")
+            .attr("x", 20)
+            .attr("y", 5)
+            .style("font-family", "sans-serif")
+            .style("font-size", "12px")
+            .style("fill", "#2d3748")
+            .style("user-select", "none");
+
+          return g;
+        }
+      );
+
+    // Apply properties to merged selections (entering + updating)
+    node.select("circle")
       .attr("fill", d => {
         switch (d.type) {
           case 'Supplier': return '#3182ce'; // blue
@@ -70,19 +183,10 @@ export default function GraphCanvas({ data }) {
           case 'Distribution': return '#805ad5'; // purple
           default: return '#718096'; // gray
         }
-      })
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 1.5);
+      });
 
-    // Render node labels
-    node.append("text")
-      .text(d => d.label)
-      .attr("x", 20)
-      .attr("y", 5)
-      .style("font-family", "sans-serif")
-      .style("font-size", "12px")
-      .style("fill", "#2d3748")
-      .style("user-select", "none");
+    node.select("text")
+      .text(d => d.label || d.id || "");
 
     // Drag Behavior
     const drag = d3.drag()
@@ -132,32 +236,10 @@ export default function GraphCanvas({ data }) {
         .attr("transform", d => `translate(${d.x}, ${d.y})`);
     });
 
-    // Create ResizeObserver to handle dynamic width/height updates responsively
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (!entries || entries.length === 0) return;
-      
-      const width = entries[0].contentRect.width || containerRef.current.clientWidth || 800;
-      const height = entries[0].contentRect.height || containerRef.current.clientHeight || 500;
-
-      // Update SVG canvas bounds
-      svg.attr("width", width).attr("height", height);
-
-      // Re-center force coordinates
-      simulation.force("center", d3.forceCenter(width / 2, height / 2));
-
-      // Re-heat simulation to adjust layout smoothly to new dimensions
-      simulation.alpha(0.3).restart();
-    });
-
-    // Start observing parent container dimensions
-    resizeObserver.observe(containerRef.current);
-
-    // Cleanup simulation, observer, and clear SVG on component unmount
-    return () => {
-      resizeObserver.disconnect();
-      simulation.stop();
-      svg.selectAll("*").remove();
-    };
+    // Update simulation data and restart
+    simulation.nodes(nodes);
+    simulation.force("link").links(links);
+    simulation.alpha(0.3).restart();
   }, [data]);
 
   return (
@@ -170,4 +252,3 @@ export default function GraphCanvas({ data }) {
     </div>
   );
 }
-
