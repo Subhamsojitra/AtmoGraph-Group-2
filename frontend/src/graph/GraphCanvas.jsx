@@ -50,12 +50,23 @@ export default function GraphCanvas({ data }) {
 
       svg.attr("width", initialWidth).attr("height", initialHeight);
 
-      // Create static containers once
-      gLinks = svg.append("g").attr("class", "links");
-      gNodes = svg.append("g").attr("class", "nodes");
+      // Create a parent group container to receive zoom/pan transforms
+      const gMain = svg.append("g").attr("class", "graph-main-content");
+      gLinks = gMain.append("g").attr("class", "links");
+      gNodes = gMain.append("g").attr("class", "nodes");
 
       gLinksRef.current = gLinks;
       gNodesRef.current = gNodes;
+
+      // Define zoom and pan behavior
+      const zoom = d3.zoom()
+        .scaleExtent([0.1, 8])
+        .on("zoom", (event) => {
+          gMain.attr("transform", event.transform);
+        });
+
+      // Bind zoom behavior to the SVG container
+      svg.call(zoom);
 
       // Create D3 Force Simulation
       simulation = d3.forceSimulation()
