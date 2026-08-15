@@ -7,6 +7,8 @@ credentials are ever needed and no secrets are printed.
 """
 
 import importlib
+import os
+import shutil
 
 import pytest
 from pydantic import SecretStr, ValidationError
@@ -134,12 +136,19 @@ def test_missing_neo4j_config_raises_validation_error(monkeypatch):
     ``Settings`` raises a Pydantic ``ValidationError``."""
     # Set env vars first so the module can be imported (singleton is created).
     _set_neo4j_env(monkeypatch)
-    from app.core.config import Settings
 
     # Remove every required Neo4j env var to simulate a misconfigured
     # environment.
     for key in _FAKE_NEO4J_ENV:
         monkeypatch.delenv(key, raising=False)
 
+    # Reload the config module to get a fresh Settings instance
+    # that will see the missing environment variables
+    from app.core import config
+    importlib.reload(config)
+    from app.core.config import Settings
+
+    # Create a new Settings instance that ignores the .env file
+    # to properly test missing configuration
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=None)

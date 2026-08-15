@@ -8,6 +8,7 @@ fastapi
 uvicorn
 pydantic
 pydantic-settings
+neo4j
 
 # Test dependencies
 httpx
