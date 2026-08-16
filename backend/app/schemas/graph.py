@@ -54,3 +54,33 @@ class GraphQueryResponse(BaseModel):
 
     results: list[GraphResultResponse]
     count: int
+
+
+class GraphNodeCreateRequest(BaseModel):
+    """Request body for creating a generic graph node."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    label: str
+    properties: dict[str, Any] = {}
+
+
+class GraphRelationshipCreateRequest(BaseModel):
+    """Request body for creating a generic graph relationship."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source_id: str
+    target_id: str
+    rel_type: str
+    properties: dict[str, Any] = {}
+
+
+class GraphSearchRequest(BaseModel):
+    """Request body for searching graph nodes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    label: Optional[str] = None
+    properties: Optional[dict[str, Any]] = None
+    limit: int = 100
