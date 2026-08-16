@@ -24,8 +24,25 @@ Notes
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# --------------------------------------------------------------------------- #
+# Environment file location
+# --------------------------------------------------------------------------- #
+# The ``.env`` file lives at the repository root (see ``.env.example``).
+# Its path is derived here as an *absolute* path from this module's location
+# on disk instead of using a relative ``"../.env"``.  Pydantic-Settings
+# resolves a relative ``env_file`` against the process working directory, so
+# the application failed with "Field required" for every Neo4j setting anytime
+# it was launched from anywhere other than ``backend/`` (e.g. the repository
+# root).  Deriving the path from ``__file__`` makes configuration loading
+# independent of the current working directory.
+_BACKEND_DIR = Path(__file__).resolve().parents[2]  # .../backend
+_PROJECT_ROOT = _BACKEND_DIR.parent                # .../AtmoGraph-Group-2
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -38,7 +55,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file="../.env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

@@ -10,12 +10,14 @@ available at ``/openapi.json``.
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
 from app.database.neo4j import neo4j_db
+
+logger = logging.getLogger("app.main")
 
 APP_NAME = "AtmoGraph API"
 APP_VERSION = "0.1.0"
@@ -26,10 +28,22 @@ API_PREFIX = "/api/v1"
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan events handler.
 
-    Handles startup and shutdown events for the application.
+    Startup: initialize the shared (reusable) Neo4j driver and probe the real
+    database connectivity. A missing/unreachable Neo4j is logged but does not
+    prevent the application from starting; the health endpoint reports the
+    accurate status.
+
+    Shutdown: close the driver and release all resources.
     """
     # Startup
     neo4j_db.initialize()
+    if neo4j_db.verify_connectivity():
+        logger.info("Neo4j connectivity at startup: connected")
+    else:
+        logger.warning(
+            "Neo4j connectivity at startup: disconnected - the /health endpoint "
+            "will report 'disconnected' until Neo4j is reachable"
+        )
     yield
     # Shutdown
     await neo4j_db.close_async()

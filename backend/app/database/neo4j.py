@@ -6,7 +6,7 @@ session management, and integration with FastAPI application lifecycle.
 
 from __future__ import annotations
 
-import logging
+import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any, AsyncGenerator, Generator, Optional
 
@@ -53,6 +53,39 @@ class Neo4jDatabase:
 
         self._initialized = False
         logger.debug("Neo4jDatabase instance created")
+
+    @property
+    def is_initialized(self) -> bool:
+        """Return True when a driver has been initialized.
+
+        This does *not* imply the database is reachable; use
+        :meth:`verify_connectivity` for a real connectivity check.
+        """
+        return self._initialized
+
+    @staticmethod
+    def _close_async_driver_sync(async_driver: Optional[AsyncDriver]) -> None:
+        """Best-effort close of an async driver from a synchronous context.
+
+        ``AsyncDriver.close()`` returns a coroutine. When no event loop is
+        running (plain scripts, pytest) the coroutine is driven to completion
+        with ``asyncio.run``. When a loop is already running (e.g. inside the
+        FastAPI lifespan) the coroutine is scheduled on that loop instead,
+        because ``asyncio.run`` cannot be used from a running loop. This keeps
+        synchronous callers from leaking an un-awaited coroutine warning.
+        """
+        if async_driver is None:
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            loop.create_task(async_driver.close())
+        else:
+            asyncio.run(async_driver.close())
 
     def initialize(self) -> None:
         """Initialize the Neo4j driver with configuration from settings.
@@ -111,16 +144,9 @@ class Neo4jDatabase:
             if sync_driver is not None:
                 sync_driver.close()
             if async_driver is not None:
-                # We cannot await the async driver close in a sync context,
-                # but we can call close() which will return a coroutine that we ignore.
-                # This is not ideal, but it's better than leaving the connection open.
-                # In practice, if the async driver creation fails, it's likely due to
-                # the same issue as the sync driver, and the async driver might not be usable.
-                # We'll try to close it synchronously and log a warning if it fails.
                 try:
-                    # This returns a coroutine, but we don't await it.
-                    # We'll just call close and ignore the coroutine.
-                    async_driver.close()
+                    # Close the async driver without leaking an un-awaited coroutine.
+                    self._close_async_driver_sync(async_driver)
                 except Exception as close_error:
                     logger.warning(
                         "Error closing async driver during init failure",
@@ -180,17 +206,21 @@ class Neo4jDatabase:
         if not self._driver:
             raise ServiceUnavailable("Neo4j driver not initialized")
 
+        session = None
         try:
             session = self._driver.session()
-            # Test the session with a simple query to ensure it's working
+            # Lightweight round-trip so connectivity errors surface immediately
+            # instead of on the caller's first real query.
             session.run("RETURN 1").consume()
         except Exception as e:
+            if session is not None:
+                session.close()
             logger.error(
                 "Failed to create Neo4j session",
                 extra={"error": str(e)},
                 exc_info=True
             )
-            raise ServiceUnavailable(f"Unable to create Neo4j session: {str(e)}")
+            raise ServiceUnavailable(f"Unable to create a Neo4j session: {e}") from e
 
         try:
             yield session
@@ -360,18 +390,18 @@ class Neo4jDatabase:
             self._driver = None
 
         if self._async_driver:
-            # Note: Async driver close should be awaited in async context
-            # For sync shutdown, we try to close it synchronously (returns coroutine we disregard)
-            # This is not ideal but better than leaving connections open
+            logger.info("Closing Neo4j async driver...")
+            async_driver = self._async_driver
+            self._async_driver = None
             try:
-                # This returns a coroutine, but we don't await it in sync context
-                self._async_driver.close()
+                # In a synchronous context the async driver cannot be awaited;
+                # close it without leaking an un-awaited coroutine.
+                self._close_async_driver_sync(async_driver)
             except Exception as close_error:
                 logger.warning(
                     "Error closing async driver in sync context",
                     extra={"error": str(close_error)}
                 )
-            self._async_driver = None
 
         self._initialized = False
         logger.info("Neo4j driver closed")

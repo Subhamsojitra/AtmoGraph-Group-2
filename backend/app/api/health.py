@@ -22,14 +22,18 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", response_model=HealthResponse)
 def get_health() -> HealthResponse:
-    """Return the current backend service status including Neo4j connectivity."""
-    # Check Neo4j connectivity
-    neo4j_status = "connected" if neo4j_db.verify_connectivity() else "disconnected"
+    """Return the current backend service status including Neo4j connectivity.
 
-    # Service status is always healthy if the API is running
-    # Neo4j connectivity is reported separately
+    The Neo4j status is the result of a *real* connectivity check
+    (``RETURN 1``) -- it is never assumed or faked. When Neo4j is
+    unreachable the service is reported as ``degraded``, not ``healthy``.
+    """
+    # Check Neo4j connectivity (performs an actual round-trip query)
+    neo4j_connected = neo4j_db.verify_connectivity()
+
+    # The API is up; Neo4j dependency status is accurate and separate.
     return HealthResponse(
-        status="healthy",
+        status="healthy" if neo4j_connected else "degraded",
         service="AtmoGraph API",
-        neo4j=neo4j_status
+        neo4j="connected" if neo4j_connected else "disconnected",
     )
