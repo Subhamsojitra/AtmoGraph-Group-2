@@ -8,7 +8,7 @@ import * as d3 from 'd3';
  * Consumes graph dataset passed via props from the host page.
  * Refined to use ref-based simulation persistence and D3 data join updates.
  */
-export default function GraphCanvas({ data }) {
+export default function GraphCanvas({ data, onNodeClick }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
@@ -220,8 +220,14 @@ export default function GraphCanvas({ data }) {
 
     node.call(drag);
 
-    // Hover Interaction
+    // Click & Hover Interaction
     node
+      .on("click", (event, d) => {
+        if (event.defaultPrevented) return;
+        if (onNodeClick) {
+          onNodeClick(d);
+        }
+      })
       .on("mouseenter", function() {
         d3.select(this).select("circle")
           .attr("stroke-width", 3);
@@ -251,7 +257,7 @@ export default function GraphCanvas({ data }) {
     simulation.nodes(nodes);
     simulation.force("link").links(links);
     simulation.alpha(0.3).restart();
-  }, [data]);
+  }, [data, onNodeClick]);
 
   return (
     <div 

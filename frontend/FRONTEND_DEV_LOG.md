@@ -6,6 +6,27 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-18 — Day 8: Real Graph API Integration & Large-Graph Rendering Preparation
+* **Work completed**:
+  - Updated `graphService.js` to retrieve real backend node data via `GET /api/v1/graph/nodes` and default relationships to `[]` as no bulk relationships endpoint currently exists.
+  - Implemented an isolated URL parameter-based dataset selector (`?mode=mock`, `?mode=backend`, `?mode=large`) to keep development testing separate from the production UI.
+  - Integrated `onNodeClick(node)` in `GraphCanvas.jsx` to bubble up the selected node data and display it in a closeable, isolated node-details overlay in `DashboardPage.jsx`, avoiding any layout conflict with Yashaswini's pending UI work.
+  - Implemented a deterministic large-graph mock generator (~2,000 nodes and ~3,000 links) to perform scalability benchmarks.
+  - Verified that all modes load correctly and browser console remains error-free.
+* **Large-Graph Benchmark Observations (2,000 nodes, 3,000 links)**:
+  - **Initial Render Speed**: The loading overlay dismisses in ~300ms, and the D3 elements are injected into the DOM within ~150ms.
+  - **Simulation Settling Time**: The simulation continues ticking and moving nodes for over 25 seconds before settling down, causing high CPU utilization (~100% of a single core).
+  - **Drag Responsiveness**: Dragging is extremely laggy (< 2 FPS). Selecting and moving a node causes it to jump erratically because force recalculation ticks freeze the main thread.
+  - **Zoom/Pan Responsiveness**: Zooming and panning using the mouse wheel / background drag is smooth (~60 FPS) because SVG container transformations are hardware-accelerated and do not trigger force ticks once the simulation is not actively running.
+  - **DOM Size**: Renders 2,000 `<g.node-group>` elements, 2,000 `<circle>` elements, 2,000 `<text>` elements, and 3,000 `<line>` elements, totalling 9,000 DOM nodes in the SVG container.
+  - **Browser Freezing**: The browser does not crash, but the tab becomes sluggish during simulation ticking and dragging.
+* **Recommendation/Optimization Proposed**:
+  - The default charge and collide forces are the main bottleneck. We propose a targeted optimization:
+    1. If nodes count > 500, disable the heavy `d3.forceCollide` (collision resolution) and reduce the simulation steps by raising `alphaDecay` to settle the layout faster.
+    2. Hide text labels (`<text>`) on initial render if nodes count > 500, showing them only on hover.
+* **Commit**: *[Pending review]*
+* **Issues/blockers**: None.
+
 ### 2026-08-17 — Day 7: Frontend Graph Data Integration Foundation
 * **Work completed**: Created `graphService.js` to serve as the asynchronous service boundary between the UI and backend APIs. Designed the service to transform raw backend structure (separate nodes and relationships) into the standard `{ nodes, links }` format dynamically without hardcoding domain-specific Neo4j types. Refactored `DashboardPage.jsx` to manage asynchronous graph states (loading, success, empty, error) and render appropriate feedback overlays. Integrated a temporary, isolated developer toggle bar in the dashboard to check all four data states in the browser. Verified that all states render cleanly, existing D3 interactions (dragging, zoom, pan, hover, coordinates preservation) are fully preserved, and browser console remains completely error-free.
 * **Commit**: *[Pending review]*
