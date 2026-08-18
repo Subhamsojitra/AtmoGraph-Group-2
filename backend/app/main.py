@@ -16,6 +16,7 @@ from fastapi import FastAPI
 
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
+from app.api.news import router as news_router
 from app.database.neo4j import neo4j_db
 
 logger = logging.getLogger("app.main")
@@ -59,3 +60,4 @@ app = FastAPI(
 
 app.include_router(health_router, prefix=API_PREFIX)
 app.include_router(graph_router, prefix=API_PREFIX)
+app.include_router(news_router, prefix=API_PREFIX)
