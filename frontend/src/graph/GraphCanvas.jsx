@@ -16,6 +16,7 @@ export default function GraphCanvas({ data, onNodeClick }) {
   const resizeObserverRef = useRef(null);
   const gLinksRef = useRef(null);
   const gNodesRef = useRef(null);
+  const selectedNodeIdRef = useRef(null);
 
   // Mount/Unmount cleanup effect
   useEffect(() => {
@@ -103,6 +104,24 @@ export default function GraphCanvas({ data, onNodeClick }) {
     // Process nodes and links data safely (basic robustness)
     const safeNodes = data?.nodes || [];
     const safeLinks = data?.links || [];
+
+    const LARGE_GRAPH_THRESHOLD = 500;
+    const isLargeMode = safeNodes.length > LARGE_GRAPH_THRESHOLD;
+
+    // Dynamically adjust forces and settings for large vs. normal graphs
+    if (isLargeMode) {
+      simulation
+        .alphaDecay(0.08)
+        .force("collide", null)
+        .force("charge", d3.forceManyBody().strength(-80).distanceMax(250))
+        .force("link", d3.forceLink().id(d => d.id).distance(80));
+    } else {
+      simulation
+        .alphaDecay(1 - Math.pow(0.001, 1 / 300))
+        .force("collide", d3.forceCollide().radius(40))
+        .force("charge", d3.forceManyBody().strength(-300))
+        .force("link", d3.forceLink().id(d => d.id).distance(120));
+    }
 
     // Map new nodes, preserving coordinates from existing nodes to avoid jarring jumps
     const previousNodes = simulation.nodes() || [];
@@ -197,7 +216,8 @@ export default function GraphCanvas({ data, onNodeClick }) {
       });
 
     node.select("text")
-      .text(d => d.label || d.id || "");
+      .text(d => d.label || d.id || "")
+      .style("display", d => (isLargeMode ? (selectedNodeIdRef.current === d.id ? "block" : "none") : "block"));
 
     // Drag Behavior
     const drag = d3.drag()
@@ -227,18 +247,34 @@ export default function GraphCanvas({ data, onNodeClick }) {
         if (onNodeClick) {
           onNodeClick(d);
         }
+
+        if (isLargeMode) {
+          // Hide text of the previously selected node, unless hovered/selected
+          const prevId = selectedNodeIdRef.current;
+          if (prevId && prevId !== d.id) {
+            gNodes.selectAll("g.node-group")
+              .filter(n => n && n.id === prevId)
+              .select("text")
+              .style("display", "none");
+          }
+          selectedNodeIdRef.current = d.id;
+          d3.select(event.currentTarget).select("text")
+            .style("display", "block");
+        }
       })
       .on("mouseenter", function() {
         d3.select(this).select("circle")
           .attr("stroke-width", 3);
         d3.select(this).select("text")
-          .style("font-weight", "600");
+          .style("font-weight", "600")
+          .style("display", "block");
       })
-      .on("mouseleave", function() {
+      .on("mouseleave", function(_, d) {
         d3.select(this).select("circle")
           .attr("stroke-width", 1.5);
         d3.select(this).select("text")
-          .style("font-weight", "normal");
+          .style("font-weight", "normal")
+          .style("display", isLargeMode ? (selectedNodeIdRef.current === d.id ? "block" : "none") : "block");
       });
 
     // Update positions on every tick
@@ -253,10 +289,21 @@ export default function GraphCanvas({ data, onNodeClick }) {
         .attr("transform", d => `translate(${d.x}, ${d.y})`);
     });
 
-    // Update simulation data and restart
+    // Update simulation data
     simulation.nodes(nodes);
     simulation.force("link").links(links);
-    simulation.alpha(0.3).restart();
+
+    if (isLargeMode) {
+      // Experimental: Synchronous pre-ticking to settle positions quickly.
+      // We will start with 40 ticks, then adjust/remove based on benchmarks.
+      simulation.alpha(0.3);
+      for (let i = 0; i < 40; i++) {
+        simulation.tick();
+      }
+      simulation.restart();
+    } else {
+      simulation.alpha(0.3).restart();
+    }
   }, [data, onNodeClick]);
 
   return (
