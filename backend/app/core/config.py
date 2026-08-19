@@ -75,6 +75,19 @@ class Settings(BaseSettings):
     neo4j_password: SecretStr
     neo4j_database: str
 
+    # ------------------------------------------------------------------ #
+    # NLP (Module 7 -- preprocessing & NER)
+    # ------------------------------------------------------------------ #
+    # The NER model is loaded lazily and cached by the service layer, so a
+    # missing model does not prevent the application from starting. The model
+    # package itself is installed out-of-band (see README) and is never
+    # downloaded automatically by the application or the test suite.
+    nlp_model_name: str = "dslim/bert-base-NER"
+    nlp_ner_max_length: int = 512
+    nlp_max_text_length: int = 10000
+    nlp_device: str = "cpu"
+    nlp_use_fast_tokenizer: bool = True
+
 
 #: Module-level singleton. Import this everywhere instead of instantiating
 #: ``Settings`` repeatedly, to avoid creating multiple settings instances.
