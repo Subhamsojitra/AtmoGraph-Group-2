@@ -14,6 +14,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.api.entity_resolution import router as entity_resolution_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
 from app.api.news import router as news_router
@@ -58,6 +59,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(entity_resolution_router, prefix=API_PREFIX)
 app.include_router(health_router, prefix=API_PREFIX)
 app.include_router(graph_router, prefix=API_PREFIX)
 app.include_router(news_router, prefix=API_PREFIX)

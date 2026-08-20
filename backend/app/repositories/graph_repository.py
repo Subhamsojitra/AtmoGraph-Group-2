@@ -256,6 +256,61 @@ class GraphRepository:
 
         return self.execute_read(query, parameters)
 
+    def find_entity_candidates(
+        self,
+        search_text: str,
+        labels: Optional[list[str]] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Search Neo4j graph nodes for potential entity resolution candidates.
+
+        This method executes parameterized Cypher queries matching node ``name``
+        or ``aliases`` attributes case-insensitively.
+
+        Args:
+            search_text: Text string to search against node names and aliases.
+            labels: Optional list of node labels to filter (e.g. ``["Port", "Supplier"]``).
+            limit: Maximum candidate records to return.
+
+        Returns:
+            List of raw candidate dictionaries from the database.
+
+        Raises:
+            ValueError: If ``search_text`` is empty or invalid.
+            ServiceUnavailable: If Neo4j is unreachable.
+        """
+        if not search_text or not isinstance(search_text, str):
+            raise ValueError("search_text must be a non-empty string")
+
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        cleaned_search = search_text.strip()
+        if not cleaned_search:
+            raise ValueError("search_text must not be whitespace-only")
+
+        label_clause = ""
+        if labels and isinstance(labels, list):
+            valid_labels = [l.strip() for l in labels if l and isinstance(l, str) and l.strip()]
+            if valid_labels:
+                formatted_labels = " OR ".join(f"n:`{lbl}`" for lbl in valid_labels)
+                label_clause = f"({formatted_labels}) AND "
+
+        query = (
+            f"MATCH (n) WHERE {label_clause}"
+            "(toLower(n.name) CONTAINS toLower($search_text) "
+            "OR ANY(alias IN coalesce(n.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_text)) "
+            "OR toLower(n.id) = toLower($search_text)) "
+            "RETURN n LIMIT $limit"
+        )
+
+        parameters = {
+            "search_text": cleaned_search,
+            "limit": limit,
+        }
+
+        return self.execute_read(query, parameters)
+
     def run_graph_query(
         self,
         query: str,
