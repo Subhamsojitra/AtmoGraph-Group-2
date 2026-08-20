@@ -203,25 +203,56 @@ export default function GraphCanvas({ data, onNodeClick }) {
         }
       );
 
+    // Extract unique node types and sort deterministically
+    const uniqueTypes = Array.from(
+      new Set(
+        nodes
+          .map(n => n.type)
+          .filter(t => t !== undefined && t !== null && t !== '')
+      )
+    ).sort();
+
+    // Premium dynamic color palette
+    const colorPalette = [
+      '#3182ce', // blue
+      '#38a169', // green
+      '#dd6b20', // orange
+      '#805ad5', // purple
+      '#e53e3e', // red
+      '#319795', // teal
+      '#d69e2e', // yellow
+      '#b7791f', // gold
+      '#4a5568'  // slate
+    ];
+
+    const typeColorMap = new Map();
+    uniqueTypes.forEach((type, index) => {
+      typeColorMap.set(type, colorPalette[index % colorPalette.length]);
+    });
+
+    const getNodeColor = (type) => {
+      if (!type) return '#718096'; // default fallback for untyped
+      return typeColorMap.get(type) || '#718096';
+    };
+
     // Apply properties to merged selections (entering + updating)
     node.select("circle")
-      .attr("fill", d => {
-        switch (d.type) {
-          case 'Supplier': return '#3182ce'; // blue
-          case 'Factory': return '#38a169'; // green
-          case 'Warehouse': return '#dd6b20'; // orange
-          case 'Distribution': return '#805ad5'; // purple
-          default: return '#718096'; // gray
-        }
-      });
+      .attr("fill", d => getNodeColor(d.type))
+      .attr("stroke", d => (selectedNodeIdRef.current === d.id ? "#3182ce" : "#fff"))
+      .attr("stroke-width", d => (selectedNodeIdRef.current === d.id ? 3 : 1.5));
 
     node.select("text")
       .text(d => d.label || d.id || "")
+      .style("font-weight", d => (selectedNodeIdRef.current === d.id ? "600" : "normal"))
       .style("display", d => (isLargeMode ? (selectedNodeIdRef.current === d.id ? "block" : "none") : "block"));
 
     // Drag Behavior
     const drag = d3.drag()
       .on("start", function(event, d) {
+        // Prevent background zoom/pan from capturing the drag
+        if (event.sourceEvent) {
+          event.sourceEvent.stopPropagation();
+        }
         if (!event.active) simulation.alphaTarget(0.3).restart();
         d.fx = d.x;
         d.fy = d.y;
@@ -243,39 +274,48 @@ export default function GraphCanvas({ data, onNodeClick }) {
     // Click & Hover Interaction
     node
       .on("click", (event, d) => {
+        // Prevent click event from bubbling up to parent SVG zoom/pan listeners
+        event.stopPropagation();
         if (event.defaultPrevented) return;
+
+        const prevId = selectedNodeIdRef.current;
+        selectedNodeIdRef.current = d.id;
+
         if (onNodeClick) {
           onNodeClick(d);
         }
 
-        if (isLargeMode) {
-          // Hide text of the previously selected node, unless hovered/selected
-          const prevId = selectedNodeIdRef.current;
-          if (prevId && prevId !== d.id) {
-            gNodes.selectAll("g.node-group")
-              .filter(n => n && n.id === prevId)
-              .select("text")
-              .style("display", "none");
-          }
-          selectedNodeIdRef.current = d.id;
-          d3.select(event.currentTarget).select("text")
-            .style("display", "block");
-        }
+        // Lightweight selection styling updates (only update previously selected and currently selected)
+        gNodes.selectAll("g.node-group")
+          .filter(n => n && (n.id === prevId || n.id === d.id))
+          .each(function(n) {
+            const isSelected = selectedNodeIdRef.current === n.id;
+            d3.select(this).select("circle")
+              .attr("stroke", isSelected ? "#3182ce" : "#fff")
+              .attr("stroke-width", isSelected ? 3 : 1.5);
+            d3.select(this).select("text")
+              .style("font-weight", isSelected ? "600" : "normal")
+              .style("display", isLargeMode ? (isSelected ? "block" : "none") : "block");
+          });
       })
       .on("mouseenter", function() {
         d3.select(this).select("circle")
+          .attr("stroke", "#3182ce")
           .attr("stroke-width", 3);
         d3.select(this).select("text")
           .style("font-weight", "600")
           .style("display", "block");
       })
-      .on("mouseleave", function(_, d) {
+      .on("mouseleave", function(_event, d) {
+        const isSelected = selectedNodeIdRef.current === d.id;
         d3.select(this).select("circle")
-          .attr("stroke-width", 1.5);
+          .attr("stroke", isSelected ? "#3182ce" : "#fff")
+          .attr("stroke-width", isSelected ? 3 : 1.5);
         d3.select(this).select("text")
-          .style("font-weight", "normal")
-          .style("display", isLargeMode ? (selectedNodeIdRef.current === d.id ? "block" : "none") : "block");
+          .style("font-weight", isSelected ? "600" : "normal")
+          .style("display", isLargeMode ? (isSelected ? "block" : "none") : "block");
       });
+
 
     // Update positions on every tick
     simulation.on("tick", () => {

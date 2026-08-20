@@ -8,26 +8,63 @@ import { staticGraphData } from '../graph/data';
  *   Backend nodes + relationships -> graphService transformation -> { nodes, links }
  */
 export function transformBackendData(backendNodes, backendRelationships) {
-  const nodes = (backendNodes || []).map(node => ({
-    id: node.id,
-    label: node.label || (node.properties && node.properties.name) || node.name || node.id,
-    type: node.type || 'default',
-    ...node
-  }));
+  const seenIds = new Set();
+  const nodes = [];
 
-  const links = (backendRelationships || []).map(rel => {
-    const source = rel.source || rel.startNodeId || rel.from;
-    const target = rel.target || rel.endNodeId || rel.to;
-    return {
-      source,
-      target,
-      type: rel.type || 'default',
-      ...rel
-    };
-  });
+  if (Array.isArray(backendNodes)) {
+    for (const node of backendNodes) {
+      if (!node || typeof node !== 'object') continue;
+
+      // Extract and sanitize ID
+      const id = node.id !== undefined && node.id !== null ? String(node.id) : null;
+      if (!id) continue;
+
+      // Deduplicate node IDs
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+
+      // Determine label with fallback order: label -> properties.name -> name -> id
+      const label = node.label || (node.properties && node.properties.name) || node.name || id;
+
+      nodes.push({
+        ...node,
+        id,
+        label: String(label),
+        type: node.type || 'default',
+        properties: node.properties || {}
+      });
+    }
+  }
+
+  const links = [];
+  if (Array.isArray(backendRelationships)) {
+    for (const rel of backendRelationships) {
+      if (!rel || typeof rel !== 'object') continue;
+
+      const source = rel.source || rel.startNodeId || rel.from;
+      const target = rel.target || rel.endNodeId || rel.to;
+
+      if (source === undefined || source === null || target === undefined || target === null) continue;
+
+      const sourceStr = String(source);
+      const targetStr = String(target);
+
+      // Ensure that relationships only reference valid node IDs
+      if (!seenIds.has(sourceStr) || !seenIds.has(targetStr)) continue;
+
+      links.push({
+        ...rel,
+        source: sourceStr,
+        target: targetStr,
+        type: rel.type || 'default',
+        properties: rel.properties || {}
+      });
+    }
+  }
 
   return { nodes, links };
 }
+
 
 /**
  * Generates a development-only mock dataset of ~2,000 nodes and ~3,000 links

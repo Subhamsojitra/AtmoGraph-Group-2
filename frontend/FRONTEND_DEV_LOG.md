@@ -6,6 +6,25 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-20 — Day 10: Graph Integration Readiness & Interaction Refinement
+* **Work completed**:
+  - Implemented defensive backend node parsing in `graphService.js`:
+    - Skips null/undefined records and nodes without valid IDs.
+    - Normalizes IDs to strings and filters out duplicate node IDs using a tracking Set.
+    - Resolves labels safely using fallback order: `label` -> `properties.name` -> `name` -> `id`.
+    - Sanitizes links to only connect nodes present in the current node ID set, preventing canvas crashes.
+    - Preserves backend mode's current `links: []` behavior (no O(N) neighbor requests or fabricated relationships).
+  - Established generic node type compatibility in `GraphCanvas.jsx`:
+    - Removed hardcoded type styling (e.g., `'Supplier'`, `'Warehouse'`, etc.) and dynamically mapped sorted unique node types to a premium color palette.
+  - Refined graph interactions and selection visuals:
+    - Separated node drag/click gestures from canvas zoom/pan by stopping event propagation on node clicks (`event.stopPropagation()`) and drag starts (`event.sourceEvent.stopPropagation()`).
+    - Added lightweight selection highlighting on nodes using a prominent blue stroke outline (`#3182ce`, stroke-width: 3) and bold text styling.
+    - Integrated mouseenter/mouseleave hover styling that respects the persistent selected node state without stomping on it.
+  - Preserved all Day 9 performance optimizations intact:
+    - Large-graph threshold (`LARGE_GRAPH_THRESHOLD = 500`), optimized D3 forces, synchronous pre-ticking (40 ticks), and label suppression.
+* **Commit**: *[Pending review]*
+* **Issues/blockers**: None.
+
 ### 2026-08-19 — Day 9: D3 Large-Graph Performance Optimization
 * **Work completed**:
   - Implemented large-graph detection with threshold `LARGE_GRAPH_THRESHOLD = 500`.
