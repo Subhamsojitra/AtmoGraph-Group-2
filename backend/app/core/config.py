@@ -110,6 +110,20 @@ class Settings(BaseSettings):
     risk_level_high: float = 71.0
     risk_level_critical: float = 91.0
 
+    # ------------------------------------------------------------------ #
+    # Risk propagation / ripple effect (Module 10)
+    # ------------------------------------------------------------------ #
+    # Module 10 starts from a resolved entity that already carries a risk
+    # score (set by Module 9) and propagates that risk downstream through the
+    # supply-chain graph. The propagated risk of an entity at traversal depth
+    # ``d`` is ``source_score * attenuation ** d`` (clamped to the 0-100
+    # scale). These defaults are a *configurable assumption* until an official
+    # specification defines them; they can be tuned via environment variables
+    # without code changes.
+    risk_propagation_max_depth: int = 5
+    risk_propagation_attenuation: float = 0.5
+    risk_propagation_max_affected: int = 500
+
 
 #: Module-level singleton. Import this everywhere instead of instantiating
 #: ``Settings`` repeatedly, to avoid creating multiple settings instances.

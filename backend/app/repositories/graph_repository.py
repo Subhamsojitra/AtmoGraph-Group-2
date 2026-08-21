@@ -256,6 +256,80 @@ class GraphRepository:
 
         return self.execute_read(query, parameters)
 
+    def find_downstream_neighbors(
+        self,
+        node_ids: list[str],
+        relationship_types: Optional[list[str]] = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Find nodes reachable via an *outgoing* relationship from any source.
+
+        This is a single-hop, directional (downstream) traversal used by the
+        risk propagation module (Module 10). A supply-chain risk flows from the
+        source entity toward the entities that depend on it, i.e. along outgoing
+        relationships (``(n)-[r]->(m)``).
+
+        The ``node_ids`` are bound as a parameter (never interpolated) and the
+        returned nodes are deduplicated. It is read-only and never creates data.
+
+        Args:
+            node_ids: Source node identifiers to expand one hop downstream.
+            relationship_types: Optional list of relationship types to follow.
+                When provided, only these relationship types are traversed.
+            limit: Maximum number of downstream neighbors to return.
+
+        Returns:
+            List of record dictionaries of the shape
+            ``{"node": <node>, "rel_type": str, "source_id": str}``.
+
+        Raises:
+            ValueError: If ``node_ids`` is empty/not a list of non-empty strings,
+                or ``limit`` is not a positive integer.
+            ServiceUnavailable: If Neo4j is unreachable.
+            Neo4jError: If the query execution fails.
+        """
+        if not isinstance(node_ids, list) or not node_ids:
+            raise ValueError("node_ids must be a non-empty list of node identifiers")
+        cleaned_ids = []
+        for node_id in node_ids:
+            if not isinstance(node_id, str) or not node_id.strip():
+                raise ValueError("node_ids must contain only non-empty strings")
+            cleaned_ids.append(node_id.strip())
+
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        rel_clause = ""
+        if relationship_types:
+            # Backtick-escape user-supplied type names, matching the existing
+            # :meth:`find_neighbors` convention. These are schema identifiers,
+            # used as literal relationship-type labels (Cypher does not allow
+            # relationship types as bind parameters).
+            valid_types = [
+                t.strip().replace("`", "")
+                for t in relationship_types
+                if isinstance(t, str) and t.strip()
+            ]
+            if valid_types:
+                rel_pattern = ":" + "|".join(f"`{t}`" for t in valid_types)
+                rel_clause = f"[r{rel_pattern}]"
+            else:
+                rel_clause = "[r]"
+        else:
+            rel_clause = "[r]"
+
+        query = (
+            "MATCH (n) WHERE n.id IN $node_ids "
+            f"MATCH (n)-{rel_clause}->(m) "
+            "WHERE NOT m.id IN $node_ids "
+            "RETURN DISTINCT m AS node, type(r) AS rel_type, n.id AS source_id "
+            "LIMIT $limit"
+        )
+
+        parameters = {"node_ids": cleaned_ids, "limit": limit}
+
+        return self.execute_read(query, parameters)
+
     def find_entity_candidates(
         self,
         search_text: str,

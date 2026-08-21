@@ -163,3 +163,125 @@ python -m pytest tests/test_risk_service.py -v   # unit (mocked repository)
 python -m pytest tests/test_risk_api.py -v       # API (mocked service)
 python -m pytest tests/test_risk_neo4j.py -v     # real Neo4j integration (skipped when down)
 ```
+
+### Module 10 — Risk Propagation / Ripple Effect
+
+Starts from a resolved entity that already carries a risk score (set by
+Module 9) and propagates that risk **downstream** through the supply-chain
+graph to the entities that depend on it. Module 10 never performs entity
+recognition, entity resolution, or risk state updates, and it never creates or
+modifies nodes (it only reads the graph).
+
+FastAPI endpoint:
+
+```
+POST /api/v1/risk-propagation/propagate
+```
+
+Request body (built from a Module 8 `node_id` + its Module 9 `risk_score`):
+
+```json
+{
+  "entity_id": "entity-001",
+  "entity_name": "Port of Rotterdam",
+  "risk_score": 80,
+  "max_depth": 3,
+  "attenuation": 0.5,
+  "relationship_types": ["SUPPLIES"]
+}
+```
+
+Only `entity_id` (blank = unresolved) and `risk_score` are meaningful
+requirements; the rest are optional and fall back to configuration defaults.
+
+Architecture:
+
+```
+Resolved Entity (Module 8)
+        ↓
+Risk State Update (Module 9) -> risk_score stored on the node
+        ↓
+Risk Propagation Request
+        ↓
+RiskPropagationService
+        ↓
+GraphRepository (existing) | RiskService.calculate_risk_level (existing)
+        ↓
+Neo4j Database (existing)
+        ↓
+Affected entities + propagated risk/impact
+```
+
+Behaviour:
+
+- Traversal is **directed downstream** (outgoing relationships `(n)-[r]->(m)`)
+  and **breadth-first with a configurable depth limit**.
+- **Cycle prevention**: a visited set ensures each node is reported once, at
+  its shallowest depth, and the depth bound prevents infinite traversal.
+- The propagated risk of an affected entity at depth `d` is
+  `source_score * attenuation ** d`, clamped to the 0-100 scale. If the source
+  node already carries a persisted `risk_score` (from Module 9) it is used in
+  preference to the request value.
+- Risk levels are derived exactly as in Module 9 by reusing
+  `RiskService.calculate_risk_level` — no second risk engine is introduced.
+- Unresolved entities (blank `node_id`) return a controlled
+  `propagated: false` response without touching the database.
+- A nonexistent source node returns `404`; Module 10 never creates nodes.
+- Neo4j being unavailable returns `503`.
+- All Cypher is **parameterized** (user-supplied values are bound, never
+  interpolated).
+
+Error mapping (all without leaking internals):
+
+| Outcome | HTTP |
+| --- | --- |
+| Success | `200` + `propagated: true` |
+| Unresolved entity | `200` + `propagated: false` |
+| Invalid risk score / depth / attenuation | `422` |
+| Source entity node not found | `404` |
+| Neo4j unavailable | `503` |
+| Unexpected error | `500` |
+
+Example response:
+
+```json
+{
+  "source_entity_id": "entity-001",
+  "source_entity_name": "Port of Rotterdam",
+  "source_risk_score": 80.0,
+  "propagated": true,
+  "affected_entities": [
+    {
+      "entity_id": "entity-002",
+      "entity_name": "Gigafactory Assembly",
+      "depth": 1,
+      "propagated_risk_score": 40.0,
+      "propagated_risk_level": "MEDIUM"
+    }
+  ],
+  "affected_count": 1,
+  "max_depth_reached": 1,
+  "timestamp": "2026-01-01T00:00:00Z",
+  "error": null
+}
+```
+
+#### Propagation settings (all optional, see `.env.example`)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RISK_PROPAGATION_MAX_DEPTH` | `5` | Default maximum traversal depth (hops) |
+| `RISK_PROPAGATION_ATTENUATION` | `0.5` | Default per-hop risk attenuation factor |
+| `RISK_PROPAGATION_MAX_AFFECTED` | `500` | Upper bound on reported affected entities |
+
+These are *not* official specification values; they are a clearly-documented
+assumption (like the Module 9 thresholds) that can be tuned without code
+changes.
+
+#### Tests
+
+```
+python -m pytest tests/test_risk_propagation_service.py -v  # unit (mocked repository/service)
+python -m pytest tests/test_risk_propagation_api.py -v      # API (mocked service)
+python -m pytest tests/test_risk_propagation_neo4j.py -v    # real Neo4j integration (skipped when down)
+```
