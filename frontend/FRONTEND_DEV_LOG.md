@@ -6,6 +6,18 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-22 — Day 12: Week 2 Integration & Stabilization
+* **Work completed**:
+  - Reviewed current frontend/backend integration status and confirmed strict compliance with FastAPI endpoints (`GET /api/v1/graph/nodes` and backend structure).
+  - Validated graph data contract `{ nodes, links }` transformation in `graphService.js`: verified that backend node categories map dynamically to `type` and resolve labels safely using properties/name fallbacks, ensuring schema-neutral compatibility.
+  - Confirmed D3 lifecycle in `GraphCanvas.jsx` is backend-agnostic and robust: verified event propagation rules (`event.stopPropagation()`, `event.sourceEvent.stopPropagation()`) that cleanly isolate node dragging/clicking from background pan/zoom.
+  - Verified selection behaviors: selected node remains highlighted on mouseleave, clicking another node shifts selection cleanly, and clicking/dragging does not trigger zoom/pan.
+  - Inspected performance optimization for large graph mode (`?mode=large` with 2,000 nodes/3,000 links) and verified D3 simulation configurations (pre-ticking, Barnes-Hut optimization, label suppression) remain stable and responsive.
+  - Performed frontend compilation check (`npm run build`) and lint verification (`npm run lint` via `oxlint`), resolving 0 warnings/errors.
+  - Confirmed strict adherence to safety guidelines: did not touch dashboard layout/components or Tailwind architecture to avoid conflicts with Yashaswini's upcoming integration, and did not hardcode domain-specific supply chain categories in graph visualization.
+* **Commit**: *[Pending review]*
+* **Issues/blockers**: None.
+
 ### 2026-08-21 — Day 11: Frontend/Backend Graph Integration Alignment
 * **Work completed**:
   - Inspected and aligned with backend graph contract (FastAPI prefix `/api/v1` and routes: `GET /graph/nodes`, `GET /graph/nodes/{node_id}`, `GET /graph/search`, `GET /graph/nodes/{node_id}/neighbors`, `POST /nodes`, and `POST /relationships`).
