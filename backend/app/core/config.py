@@ -88,6 +88,28 @@ class Settings(BaseSettings):
     nlp_device: str = "cpu"
     nlp_use_fast_tokenizer: bool = True
 
+    # ------------------------------------------------------------------ #
+    # Risk state update (Module 9)
+    # ------------------------------------------------------------------ #
+    # Risk scores use a 0-100 scale: 0 is the lowest/most benign risk and 100
+    # is the highest possible risk. Out-of-range values are rejected as invalid
+    # (never silently clamped).
+    #
+    # Risk levels are derived from the 0-100 score using the thresholds below.
+    # Those thresholds are a *configurable assumption* (documented in the
+    # README); they are NOT part of an official project specification yet, so
+    # they can be tuned via environment variables without code changes:
+    #
+    #   LOW      [0, 30]                 score < RISK_LEVEL_MEDIUM
+    #   MEDIUM   [31, 70]                score < RISK_LEVEL_HIGH
+    #   HIGH     [71, 90]                score < RISK_LEVEL_CRITICAL
+    #   CRITICAL [91, 100]               score >= RISK_LEVEL_CRITICAL
+    risk_score_min: float = 0.0
+    risk_score_max: float = 100.0
+    risk_level_medium: float = 31.0
+    risk_level_high: float = 71.0
+    risk_level_critical: float = 91.0
+
 
 #: Module-level singleton. Import this everywhere instead of instantiating
 #: ``Settings`` repeatedly, to avoid creating multiple settings instances.

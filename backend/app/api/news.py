@@ -25,10 +25,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from app.core.logger import get_logger
 from app.schemas.ner import NERAnalysisRequest, NERAnalysisResponse
 from app.schemas.news import NewsIngestRequest, NewsIngestResponse
+from app.schemas.risk import RiskLevelUpdateRequest, RiskStateUpdateResponse
 from app.services.nlp.exceptions import (
     ModelUnavailableError,
     NERProcessingError,
@@ -36,6 +38,8 @@ from app.services.nlp.exceptions import (
 )
 from app.services.nlp.ingestion_service import IngestionService
 from app.services.nlp.ner_service import NERService
+from app.services.risk.exceptions import EntityNotFoundError
+from app.services.risk.risk_service import RiskService
 
 logger = get_logger(__name__)
 
@@ -71,6 +75,16 @@ def get_ner_service() -> NERService:
     dependency with a lightweight fake model manager.
     """
     return _ner_service
+
+
+def get_risk_service() -> RiskService:
+    """Provide a :class:`RiskService` instance to the risk-update route.
+
+    The service is lightweight and stateless apart from its injected
+    :class:`GraphRepository`, so a new instance per request is fine. Tests
+    override this dependency to inject a mocked repository/service.
+    """
+    return RiskService()
 
 
 # --------------------------------------------------------------------------- #
@@ -147,18 +161,89 @@ def analyze_article(
         logger.error("NLP model unavailable during analysis")
         raise HTTPException(
             status_code=503,
-            detail="The NLP model is currently unavailable. Please try again later.",
+            detail="The NLP model is currently unavailable. Please try again later."
         )
     except NERProcessingError:
         logger.error("NER processing failed")
         raise HTTPException(
             status_code=500,
-            detail="NLP processing failed unexpectedly.",
+            detail="NLP processing failed unexpectedly."
         )
     except Exception:
         logger.error("NER analysis failed", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="An unexpected error occurred during NLP analysis.",
+            detail="An unexpected error occurred during NLP analysis."
         )
 
+
+@router.post(
+    "/risk-update",
+    response_model=RiskStateUpdateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update risk state of a resolved entity",
+    description=(
+        "Accept a resolved entity from Module 8 and update its risk state in Neo4j. "
+        "Does not perform entity recognition or resolution. "
+        "Validates risk score and updates existing graph node properties."
+    ),
+    responses={
+        422: {"description": "Invalid input (invalid risk score or malformed payload)"},
+        404: {"description": "Entity node not found in graph"},
+        503: {"description": "Graph database service unavailable"},
+        500: {"description": "Unexpected internal error"},
+    },
+)
+def update_risk_state(
+    payload: RiskLevelUpdateRequest,
+    service: RiskService = Depends(get_risk_service),
+) -> RiskStateUpdateResponse:
+    """Update the risk state of a resolved entity.
+
+    Expects a resolved entity (``node_id`` from Module 8 entity resolution).
+    Updates the ``risk_score`` and ``risk_level`` properties on the existing
+    Neo4j node. Never performs entity recognition/resolution and never creates
+    nodes.
+
+    Error mapping:
+    - 200 + ``updated=False``: entity is unresolved (no node id)
+    - 422: invalid risk score (out of 0-100 range)
+    - 404: entity id provided but node does not exist in the graph
+    - 503: Neo4j unavailable
+    - 500: unexpected internal failure
+    """
+    try:
+        return service.update_risk_state(payload)
+    except EntityNotFoundError:
+        logger.warning(
+            "Risk update API: entity node not found",
+            extra={"entity_id": payload.entity_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity node not found in graph.",
+        )
+    except ServiceUnavailable:
+        logger.error("Risk update API: Neo4j service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Graph database service is currently unavailable. "
+                "Please try again later."
+            ),
+        )
+    except Neo4jError as exc:
+        logger.error("Risk update API: Neo4j error", extra={"error": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected database error occurred.",
+        )
+    except ValueError as exc:
+        logger.warning("Risk update API: invalid input", extra={"error": str(exc)})
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except Exception as exc:
+        logger.error("Risk update API: unexpected error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected internal error occurred.",
+        )
