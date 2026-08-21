@@ -23,14 +23,28 @@ export function transformBackendData(backendNodes, backendRelationships) {
       if (seenIds.has(id)) continue;
       seenIds.add(id);
 
-      // Determine label with fallback order: label -> properties.name -> name -> id
-      const label = node.label || (node.properties && node.properties.name) || node.name || id;
+      // Determine the type:
+      // If node.type is explicitly provided (mock data), use it.
+      // Otherwise, map it to node.label (Neo4j node label in backend data).
+      // Fallback to 'default' if neither is present.
+      const type = node.type || node.label || 'default';
+
+      // Determine label with safe fallback order:
+      // If node.type is present (mock data), prioritize node.label as display label.
+      // If node.type is NOT present (backend data), prioritize properties.name/title/label or node.name,
+      // and only fall back to node.label (which represents the Neo4j type label) or id if name is missing.
+      let label;
+      if (node.type) {
+        label = node.label || (node.properties && (node.properties.name || node.properties.title || node.properties.label)) || node.name || id;
+      } else {
+        label = (node.properties && (node.properties.name || node.properties.title || node.properties.label)) || node.name || node.label || id;
+      }
 
       nodes.push({
         ...node,
         id,
         label: String(label),
-        type: node.type || 'default',
+        type: String(type),
         properties: node.properties || {}
       });
     }

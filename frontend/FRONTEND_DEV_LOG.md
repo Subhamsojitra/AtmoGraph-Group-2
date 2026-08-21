@@ -6,6 +6,19 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-21 — Day 11: Frontend/Backend Graph Integration Alignment
+* **Work completed**:
+  - Inspected and aligned with backend graph contract (FastAPI prefix `/api/v1` and routes: `GET /graph/nodes`, `GET /graph/nodes/{node_id}`, `GET /graph/search`, `GET /graph/nodes/{node_id}/neighbors`, `POST /nodes`, and `POST /relationships`).
+  - Validated frontend service boundary in `graphService.js`:
+    - Updated `transformBackendData` to map Neo4j node labels to node categories (`type`) in the D3 visualization if `node.type` is not specified, preventing all nodes from defaulting to a single gray color.
+    - Added display name resolution for backend nodes that prioritizes properties name/title/label or node name over the raw type label.
+    - Maintained strict string normalization for node IDs, filtered out invalid nodes and links referencing missing nodes, and safely handled empty backend datasets.
+    - Verified backend mode does not fabricate mock relationships (returns `links: []` since no bulk relationship route exists), preserving the exact backend reality.
+  - Confirmed `GraphCanvas` remains entirely backend-agnostic and contains no FastAPI or domain-specific assumptions (no references to "Supplier", "Warehouse", etc.).
+  - Confirmed all Day 9/10 optimizations (pre-ticking, Barnes-Hut optimization, ResizeObserver dynamic layout, drag/pan/zoom gestures, lightweight hover/selection overlays) are fully preserved.
+* **Commit**: *[Pending review]*
+* **Issues/blockers**: None.
+
 ### 2026-08-20 — Day 10: Graph Integration Readiness & Interaction Refinement
 * **Work completed**:
   - Implemented defensive backend node parsing in `graphService.js`:
