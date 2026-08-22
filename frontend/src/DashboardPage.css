@@ -1,0 +1,154 @@
+/* AtmoGraph Dashboard — vanilla CSS (Tailwind removed per team decision) */
+
+* { box-sizing: border-box; }
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+}
+
+/* ---------- Header ---------- */
+.header {
+  position: relative;
+  display: flex;
+  height: 64px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  border-bottom: 1px solid;
+  padding: 0 16px;
+}
+@media (min-width: 640px) { .header { padding: 0 24px; } }
+
+.contour-bg {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+  opacity: 0.16;
+}
+
+.header-left { position: relative; display: flex; align-items: center; gap: 12px; }
+.header-right { position: relative; display: flex; align-items: center; gap: 8px; }
+@media (min-width: 640px) { .header-right { gap: 16px; } }
+
+.menu-toggle-btn { border-radius: 6px; padding: 8px; background: none; border: none; cursor: pointer; }
+.menu-toggle-btn:hover { background-color: rgba(255,255,255,0.05); }
+@media (min-width: 768px) { .menu-toggle-btn { display: none; } }
+
+.brand-icon { display: flex; height: 36px; width: 36px; align-items: center; justify-content: center; border-radius: 8px; }
+
+.brand-text-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.brand-text-subtitle { display: none; font-size: 12px; margin: 0; }
+@media (min-width: 640px) { .brand-text-subtitle { display: block; } }
+
+.live-pill { display: none; align-items: center; gap: 6px; border-radius: 9999px; padding: 6px 12px; font-size: 12px; }
+@media (min-width: 640px) { .live-pill { display: flex; } }
+
+.icon-btn { position: relative; border-radius: 6px; padding: 8px; background: none; border: none; cursor: pointer; }
+.icon-btn:hover { background-color: rgba(255,255,255,0.05); }
+.notif-dot { position: absolute; right: 6px; top: 6px; height: 6px; width: 6px; border-radius: 9999px; }
+
+.avatar { display: flex; height: 32px; width: 32px; align-items: center; justify-content: center; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+
+/* ---------- Body layout ---------- */
+.dashboard-body { display: flex; min-height: 0; flex: 1; }
+.main-content { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+
+/* ---------- Sidebar ---------- */
+.sidebar { display: none; width: 240px; flex-shrink: 0; flex-direction: column; overflow-y: auto; border-right: 1px solid; padding: 20px 0; }
+@media (min-width: 768px) { .sidebar { display: flex; } }
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 4px; padding: 0 12px; }
+.nav-item { display: flex; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 14px; background: none; cursor: pointer; width: 100%; text-align: left; }
+.nav-item-chevron { margin-left: auto; opacity: 0.6; }
+
+.stats-section { margin-top: 24px; padding: 0 12px; }
+.stats-label { margin: 0 0 8px; padding: 0 12px; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+.stats-list { display: flex; flex-direction: column; gap: 8px; }
+.stat-item { display: flex; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; }
+.stat-label { font-size: 12px; }
+.stat-value { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 500; }
+
+/* ---------- Mobile nav drawer ---------- */
+.mobile-drawer-overlay { position: fixed; inset: 0; z-index: 40; }
+@media (min-width: 768px) { .mobile-drawer-overlay { display: none; } }
+.mobile-drawer-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.6); }
+.mobile-drawer-panel { position: absolute; left: 0; top: 0; display: flex; height: 100%; width: 256px; flex-direction: column; overflow-y: auto; padding: 20px 0; }
+.mobile-drawer-header { margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+.mobile-drawer-header button { background: none; border: none; cursor: pointer; }
+
+/* ---------- Controls bar ---------- */
+.controls-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-bottom: 1px solid; padding: 12px 16px; }
+@media (min-width: 640px) { .controls-bar { padding: 12px 24px; } }
+
+.controls-zoom-group { display: flex; align-items: center; gap: 4px; }
+.zoom-btn { border-radius: 6px; padding: 8px; background: none; cursor: pointer; }
+.zoom-btn:hover { background-color: rgba(255,255,255,0.05); }
+
+/* ---------- Search ---------- */
+.search-container { position: relative; min-width: 160px; flex: 1; }
+.search-box { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 8px 12px; }
+.search-input { width: 100%; background: transparent; font-size: 14px; outline: none; border: none; }
+.search-input::placeholder { font-size: 13px; }
+.search-clear-btn { background: none; border: none; cursor: pointer; display: flex; align-items: center; }
+.search-dropdown { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30; max-height: 256px; overflow-y: auto; border-radius: 8px; padding: 4px 0; box-shadow: 0 10px 25px rgba(0,0,0,0.35); }
+.search-result-item { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; text-align: left; background: none; border: none; cursor: pointer; }
+.search-result-item:hover, .search-result-item:focus-visible { background-color: rgba(255,255,255,0.05); }
+.search-result-name { display: block; font-size: 12px; font-weight: 500; }
+.search-result-region { display: block; font-size: 11px; }
+.search-no-results { margin: 0; padding: 12px; font-size: 12px; }
+
+/* ---------- Filter ---------- */
+.filter-container { position: relative; }
+.filter-toggle-btn { display: flex; align-items: center; gap: 6px; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.filter-badge-count { display: flex; height: 16px; width: 16px; align-items: center; justify-content: center; border-radius: 9999px; font-size: 10px; }
+.filter-popover { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 224px; border-radius: 8px; padding: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.35); }
+.filter-fieldset { margin: 0 0 12px; border: 0; padding: 0; }
+.filter-legend { margin: 0 0 8px; padding: 0; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+.filter-options { display: flex; flex-direction: column; gap: 6px; }
+.filter-option-label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.filter-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid; padding-top: 8px; }
+.filter-clear-btn, .filter-apply-btn { border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; background: none; border: 1px solid transparent; }
+.filter-apply-btn { font-weight: 500; }
+.pan-btn { border-radius: 6px; padding: 8px; cursor: pointer; }
+
+/* ---------- Graph canvas slot ---------- */
+.graph-canvas-wrapper { min-height: 0; flex: 1; }
+
+/* ---------- Node details ---------- */
+.node-panel { display: none; width: 320px; flex-shrink: 0; flex-direction: column; overflow-y: auto; border-left: 1px solid; padding: 20px; }
+@media (min-width: 1024px) { .node-panel { display: flex; } }
+.node-panel-heading { margin: 0 0 16px; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+
+.node-empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px 0; text-align: center; }
+.node-empty-title { font-size: 14px; margin: 0; }
+.node-empty-desc { font-size: 12px; margin: 0; }
+
+.node-details-content { display: flex; flex-direction: column; gap: 16px; }
+.node-title { font-size: 14px; font-weight: 500; margin: 0; }
+.node-subtitle { font-size: 12px; margin: 0; }
+.node-note-box { border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; }
+.node-meta-list { display: flex; flex-direction: column; gap: 8px; font-size: 12px; list-style: none; margin: 0; padding: 0; }
+.node-meta-row { display: flex; align-items: center; justify-content: space-between; }
+.node-meta-label { display: flex; align-items: center; gap: 6px; }
+.node-meta-value { font-family: 'JetBrains Mono', monospace; }
+
+.node-sheet-overlay { position: fixed; inset: 0; z-index: 40; }
+@media (min-width: 1024px) { .node-sheet-overlay { display: none; } }
+.node-sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.6); }
+.node-sheet-panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 75vh; overflow-y: auto; border-top-left-radius: 16px; border-top-right-radius: 16px; padding: 20px 20px 32px; }
+.node-sheet-handle { margin: 0 auto 16px; height: 4px; width: 40px; border-radius: 9999px; }
+.node-sheet-header { margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; }
+.node-sheet-header button { background: none; border: none; cursor: pointer; }
+
+/* ---------- Risk badge ---------- */
+.risk-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 10px; font-size: 12px; font-weight: 500; }
+.risk-dot { height: 6px; width: 6px; border-radius: 9999px; }
+
+/* ---------- Focus ---------- */
+:focus-visible { border-radius: 4px; }

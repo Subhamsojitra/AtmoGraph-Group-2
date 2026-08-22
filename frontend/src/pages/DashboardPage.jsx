@@ -1,25 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Menu, X, Search, ZoomIn, ZoomOut, Maximize2, SlidersHorizontal, Hand,
   LayoutGrid, Bell, AlertTriangle, Activity, MapPin, Boxes, Clock,
-  ChevronRight, Radio, FileText, Database, Settings, Wind, RefreshCw,
+  ChevronRight, Radio, FileText, Database, Settings, Wind,
 } from "lucide-react";
-
-// Set to false once the real graph service is wired up — this only exists
-// to demo the error/retry state without a backend.
-const DEMO_SIMULATE_ERRORS = true;
+import GraphCanvas from "../graph/GraphCanvas"; // TODO: confirm this relative path matches
+                                                 // DashboardPage.jsx's real location in the repo
+import "../DashboardPage.css";
 
 /* ============================================================
    AtmoGraph — Week 1 Frontend Foundation (Yashaswini's scope)
-   Dashboard layout, header/sidebar, controls bar (search + filter
-   UI), node details panel (incl. mobile bottom sheet), loading/
-   empty/error states, responsive foundation.
 
-   Graph rendering, live data wiring, and the WebSocket/prediction
-   pipeline are out of scope for Week 1 — that's the graph
-   container placeholder below, owned by the architecture side.
-   Search/filter here are UI-only per Week 1 scope: no backend
-   query, just local mock data so the interaction shape is real.
+   Changes for this PR, per teammate review:
+   - Removed the local GraphCanvas placeholder + its simulated
+     loading/error lifecycle. This now renders the shared
+     src/graph/GraphCanvas.jsx directly; that component owns its
+     own loading/empty/error/ready states during integration.
+   - Removed Tailwind. All layout/spacing now lives in
+     DashboardPage.css; per-instance colors (from TOKENS) stay as
+     inline styles since they were never Tailwind classes.
    ============================================================ */
 
 const TOKENS = {
@@ -92,11 +91,7 @@ const MOCK_NODES = [
 
 function ContourBackground() {
   return (
-    <svg
-      className="pointer-events-none absolute inset-0 h-full w-full opacity-[0.16]"
-      viewBox="0 0 800 120"
-      preserveAspectRatio="none"
-    >
+    <svg className="contour-bg" viewBox="0 0 800 120" preserveAspectRatio="none">
       <defs>
         <style>{`
           .contour { animation: drift 22s linear infinite; }
@@ -134,10 +129,10 @@ function RiskBadge({ level }) {
   const s = map[level] || map.none;
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+      className="risk-badge"
       style={{ backgroundColor: `${s.color}1A`, color: s.color, border: `1px solid ${s.color}40` }}
     >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />
+      <span className="risk-dot" style={{ backgroundColor: s.color }} />
       {s.label}
     </span>
   );
@@ -145,61 +140,44 @@ function RiskBadge({ level }) {
 
 function Header({ onMenuClick }) {
   return (
-    <header
-      className="relative flex h-16 shrink-0 items-center justify-between overflow-hidden border-b px-4 sm:px-6"
-      style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}
-    >
+    <header className="header" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
       <ContourBackground />
-      <div className="relative flex items-center gap-3">
+      <div className="header-left">
         <button
           onClick={onMenuClick}
-          className="rounded-md p-2 hover:bg-white/5 md:hidden"
+          className="menu-toggle-btn"
           style={{ color: TOKENS.textDim }}
           aria-label="Toggle navigation"
         >
           <Menu size={20} />
         </button>
-        <div
-          className="flex h-9 w-9 items-center justify-center rounded-lg"
-          style={{ backgroundColor: `${TOKENS.brand}22`, border: `1px solid ${TOKENS.brand}55` }}
-        >
+        <div className="brand-icon" style={{ backgroundColor: `${TOKENS.brand}22`, border: `1px solid ${TOKENS.brand}55` }}>
           <Wind size={18} style={{ color: TOKENS.brand }} />
         </div>
-        <div className="leading-tight">
-          <h1
-            className="text-[15px] font-semibold tracking-tight"
-            style={{ color: TOKENS.text, fontFamily: "'Space Grotesk', sans-serif" }}
-          >
+        <div>
+          <h1 className="brand-text-title" style={{ color: TOKENS.text, fontFamily: "'Space Grotesk', sans-serif" }}>
             AtmoGraph
           </h1>
-          <p className="hidden text-xs sm:block" style={{ color: TOKENS.textDim }}>
+          <p className="brand-text-subtitle" style={{ color: TOKENS.textDim }}>
             Supply Chain Ripple Monitor
           </p>
         </div>
       </div>
 
-      <div className="relative flex items-center gap-2 sm:gap-4">
+      <div className="header-right">
         <div
-          className="hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs sm:flex"
+          className="live-pill"
           style={{ backgroundColor: `${TOKENS.flow}14`, border: `1px solid ${TOKENS.flow}40`, color: TOKENS.flow }}
         >
           <Radio size={12} />
           Live feed synced
         </div>
-        <button
-          className="relative rounded-md p-2 hover:bg-white/5"
-          style={{ color: TOKENS.textDim }}
-          aria-label="Notifications, 1 unread"
-        >
+        <button className="icon-btn" style={{ color: TOKENS.textDim }} aria-label="Notifications, 1 unread">
           <Bell size={18} />
-          <span
-            className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: TOKENS.riskHigh }}
-            aria-hidden="true"
-          />
+          <span className="notif-dot" style={{ backgroundColor: TOKENS.riskHigh }} aria-hidden="true" />
         </button>
         <div
-          className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium"
+          className="avatar"
           style={{ backgroundColor: TOKENS.surface2, color: TOKENS.text, border: `1px solid ${TOKENS.border}` }}
           aria-label="Account: Yashaswini B"
           role="img"
@@ -220,11 +198,11 @@ function Sidebar({ mobileOpen, onClose }) {
 
   const body = (
     <>
-      <nav className="flex flex-col gap-1 px-3">
+      <nav className="sidebar-nav">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.label}
-            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors"
+            className="nav-item"
             style={{
               backgroundColor: item.active ? `${TOKENS.brand}1A` : "transparent",
               color: item.active ? TOKENS.text : TOKENS.textDim,
@@ -233,27 +211,23 @@ function Sidebar({ mobileOpen, onClose }) {
           >
             <item.icon size={17} />
             {item.label}
-            {item.active && <ChevronRight size={14} className="ml-auto opacity-60" />}
+            {item.active && <ChevronRight size={14} className="nav-item-chevron" />}
           </button>
         ))}
       </nav>
 
-      <div className="mt-6 px-3">
-        <p className="mb-2 px-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: TOKENS.textDim }}>
-          Network snapshot
-        </p>
-        <div className="flex flex-col gap-2">
+      <div className="stats-section">
+        <p className="stats-label" style={{ color: TOKENS.textDim }}>Network snapshot</p>
+        <div className="stats-list">
           {stats.map((s) => (
             <div
               key={s.label}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5"
+              className="stat-item"
               style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}` }}
             >
               <s.icon size={15} style={{ color: s.color }} />
-              <span className="text-xs" style={{ color: TOKENS.textDim }}>{s.label}</span>
-              <span className="ml-auto font-mono text-sm font-medium" style={{ color: TOKENS.text }}>
-                {s.value}
-              </span>
+              <span className="stat-label" style={{ color: TOKENS.textDim }}>{s.label}</span>
+              <span className="stat-value" style={{ color: TOKENS.text }}>{s.value}</span>
             </div>
           ))}
         </div>
@@ -263,23 +237,17 @@ function Sidebar({ mobileOpen, onClose }) {
 
   return (
     <>
-      <aside
-        className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r py-5 md:flex"
-        style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}
-      >
+      <aside className="sidebar" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
         {body}
       </aside>
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
-          <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-          <aside
-            className="absolute left-0 top-0 flex h-full w-64 flex-col overflow-y-auto py-5"
-            style={{ backgroundColor: TOKENS.surface, borderRight: `1px solid ${TOKENS.border}` }}
-          >
-            <div className="mb-4 flex items-center justify-between px-4">
-              <span className="text-sm font-medium" style={{ color: TOKENS.text }}>Menu</span>
-              <button onClick={onClose} style={{ color: TOKENS.textDim }}>
+        <div className="mobile-drawer-overlay">
+          <div className="mobile-drawer-backdrop" onClick={onClose} />
+          <aside className="mobile-drawer-panel" style={{ backgroundColor: TOKENS.surface, borderRight: `1px solid ${TOKENS.border}` }}>
+            <div className="mobile-drawer-header">
+              <span style={{ fontSize: 14, fontWeight: 500, color: TOKENS.text }}>Menu</span>
+              <button onClick={onClose} style={{ color: TOKENS.textDim }} aria-label="Close menu">
                 <X size={18} />
               </button>
             </div>
@@ -298,9 +266,7 @@ function SearchBar({ onSelect }) {
 
   useEffect(() => {
     function handleClickOutside(e) {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setFocused(false);
-      }
+      if (containerRef.current && !containerRef.current.contains(e.target)) setFocused(false);
     }
     function handleKeyDown(e) {
       if (e.key === "Escape") setFocused(false);
@@ -319,11 +285,8 @@ function SearchBar({ onSelect }) {
   const showDropdown = focused && query.trim().length > 0;
 
   return (
-    <div ref={containerRef} className="relative min-w-[160px] flex-1">
-      <div
-        className="flex items-center gap-2 rounded-lg px-3 py-2"
-        style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${focused ? TOKENS.brand + "80" : TOKENS.border}` }}
-      >
+    <div ref={containerRef} className="search-container">
+      <div className="search-box" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${focused ? TOKENS.brand + "80" : TOKENS.border}` }}>
         <Search size={15} style={{ color: TOKENS.textDim }} aria-hidden="true" />
         <input
           id="node-search-input"
@@ -336,11 +299,11 @@ function SearchBar({ onSelect }) {
           aria-expanded={showDropdown}
           aria-controls="node-search-results"
           aria-autocomplete="list"
-          className="w-full bg-transparent text-sm outline-none placeholder:text-[13px]"
+          className="search-input"
           style={{ color: TOKENS.text }}
         />
         {query && (
-          <button onClick={() => setQuery("")} style={{ color: TOKENS.textDim }} aria-label="Clear search">
+          <button onClick={() => setQuery("")} className="search-clear-btn" style={{ color: TOKENS.textDim }} aria-label="Clear search">
             <X size={14} />
           </button>
         )}
@@ -351,11 +314,11 @@ function SearchBar({ onSelect }) {
           id="node-search-results"
           role="listbox"
           aria-label="Search results"
-          className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-64 overflow-y-auto rounded-lg py-1 shadow-lg"
+          className="search-dropdown"
           style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}` }}
         >
           {results.length === 0 ? (
-            <p className="px-3 py-3 text-xs" style={{ color: TOKENS.textDim }} role="status">
+            <p className="search-no-results" style={{ color: TOKENS.textDim }} role="status">
               No nodes match “{query.trim()}”.
             </p>
           ) : (
@@ -364,16 +327,12 @@ function SearchBar({ onSelect }) {
                 key={n.id}
                 role="option"
                 aria-selected="false"
-                onClick={() => {
-                  onSelect(n);
-                  setQuery(n.name);
-                  setFocused(false);
-                }}
-                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/5 focus-visible:bg-white/5"
+                onClick={() => { onSelect(n); setQuery(n.name); setFocused(false); }}
+                className="search-result-item"
               >
                 <span>
-                  <span className="block text-xs font-medium" style={{ color: TOKENS.text }}>{n.name}</span>
-                  <span className="block text-[11px]" style={{ color: TOKENS.textDim }}>{n.region}</span>
+                  <span className="search-result-name" style={{ color: TOKENS.text }}>{n.name}</span>
+                  <span className="search-result-region" style={{ color: TOKENS.textDim }}>{n.region}</span>
                 </span>
                 <RiskBadge level={n.risk} />
               </button>
@@ -413,13 +372,13 @@ function FilterPanel() {
   const activeCount = (risk !== "All" ? 1 : 0) + types.length;
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="filter-container">
       <button
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls="filter-panel"
-        className="flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium"
+        className="filter-toggle-btn"
         style={{
           color: activeCount ? TOKENS.brand : TOKENS.textDim,
           border: `1px solid ${activeCount ? TOKENS.brand + "55" : TOKENS.border}`,
@@ -429,35 +388,25 @@ function FilterPanel() {
         <SlidersHorizontal size={14} aria-hidden="true" />
         Filter
         {activeCount > 0 && (
-          <span
-            className="flex h-4 w-4 items-center justify-center rounded-full text-[10px]"
-            style={{ backgroundColor: TOKENS.brand, color: TOKENS.bg }}
-          >
+          <span className="filter-badge-count" style={{ backgroundColor: TOKENS.brand, color: TOKENS.bg }}>
             {activeCount}
           </span>
         )}
       </button>
 
       {open && (
-        <div
-          id="filter-panel"
-          className="absolute right-0 top-[calc(100%+6px)] z-30 w-56 rounded-lg p-3 shadow-lg"
-          style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}` }}
-        >
-          <fieldset className="mb-3 border-0 p-0 m-0">
-            <legend className="mb-2 text-[11px] font-medium uppercase tracking-wider" style={{ color: TOKENS.textDim }}>
-              Risk
-            </legend>
-            <div className="flex flex-col gap-1.5">
+        <div id="filter-panel" className="filter-popover" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}` }}>
+          <fieldset className="filter-fieldset">
+            <legend className="filter-legend" style={{ color: TOKENS.textDim }}>Risk</legend>
+            <div className="filter-options">
               {RISK_OPTIONS.map((r) => (
-                <label key={r} className="flex items-center gap-2 text-xs" style={{ color: TOKENS.text }}>
+                <label key={r} className="filter-option-label" style={{ color: TOKENS.text }}>
                   <input
                     type="radio"
                     name="risk"
                     checked={risk === r}
                     onChange={() => setRisk(r)}
-                    className="accent-current"
-                    style={{ color: TOKENS.brand }}
+                    style={{ accentColor: TOKENS.brand }}
                   />
                   {r}
                 </label>
@@ -465,19 +414,16 @@ function FilterPanel() {
             </div>
           </fieldset>
 
-          <fieldset className="mb-3 border-0 p-0 m-0">
-            <legend className="mb-2 text-[11px] font-medium uppercase tracking-wider" style={{ color: TOKENS.textDim }}>
-              Node type
-            </legend>
-            <div className="flex flex-col gap-1.5">
+          <fieldset className="filter-fieldset">
+            <legend className="filter-legend" style={{ color: TOKENS.textDim }}>Node type</legend>
+            <div className="filter-options">
               {TYPE_OPTIONS.map((t) => (
-                <label key={t} className="flex items-center gap-2 text-xs" style={{ color: TOKENS.text }}>
+                <label key={t} className="filter-option-label" style={{ color: TOKENS.text }}>
                   <input
                     type="checkbox"
                     checked={types.includes(t)}
                     onChange={() => toggleType(t)}
-                    className="accent-current"
-                    style={{ color: TOKENS.brand }}
+                    style={{ accentColor: TOKENS.brand }}
                   />
                   {t}
                 </label>
@@ -485,17 +431,13 @@ function FilterPanel() {
             </div>
           </fieldset>
 
-          <div className="flex items-center justify-end gap-2 border-t pt-2" style={{ borderColor: TOKENS.border }}>
-            <button
-              onClick={() => { setRisk("All"); setTypes([]); }}
-              className="rounded-md px-2.5 py-1.5 text-xs"
-              style={{ color: TOKENS.textDim }}
-            >
+          <div className="filter-actions" style={{ borderColor: TOKENS.border }}>
+            <button onClick={() => { setRisk("All"); setTypes([]); }} className="filter-clear-btn" style={{ color: TOKENS.textDim }}>
               Clear
             </button>
             <button
               onClick={() => setOpen(false)}
-              className="rounded-md px-2.5 py-1.5 text-xs font-medium"
+              className="filter-apply-btn"
               style={{ backgroundColor: `${TOKENS.brand}22`, color: TOKENS.brand, border: `1px solid ${TOKENS.brand}55` }}
             >
               Apply
@@ -511,19 +453,16 @@ function ControlsBar({ onSelectNode }) {
   const [panActive, setPanActive] = useState(false);
 
   return (
-    <div
-      className="flex flex-wrap items-center gap-2 border-b px-4 py-3 sm:px-6"
-      style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}
-    >
+    <div className="controls-bar" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
       <SearchBar onSelect={onSelectNode} />
 
-      <div className="flex items-center gap-1">
+      <div className="controls-zoom-group">
         <button
           onClick={() => setPanActive((p) => !p)}
           title="Pan"
           aria-label="Toggle pan mode"
           aria-pressed={panActive}
-          className="rounded-md p-2 hover:bg-white/5"
+          className="pan-btn"
           style={{
             color: panActive ? TOKENS.brand : TOKENS.textDim,
             border: `1px solid ${panActive ? TOKENS.brand + "55" : TOKENS.border}`,
@@ -537,13 +476,7 @@ function ControlsBar({ onSelectNode }) {
           { icon: ZoomOut, label: "Zoom out" },
           { icon: Maximize2, label: "Fit to screen" },
         ].map(({ icon: Icon, label }) => (
-          <button
-            key={label}
-            title={label}
-            aria-label={label}
-            className="rounded-md p-2 hover:bg-white/5"
-            style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}
-          >
+          <button key={label} title={label} aria-label={label} className="zoom-btn" style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}>
             <Icon size={15} />
           </button>
         ))}
@@ -554,78 +487,13 @@ function ControlsBar({ onSelectNode }) {
   );
 }
 
-function GraphCanvas({ state, onRetry }) {
-  if (state === "loading") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <div
-          className="h-10 w-10 animate-spin rounded-full border-2 border-t-transparent"
-          style={{ borderColor: `${TOKENS.flow}33`, borderTopColor: TOKENS.flow }}
-        />
-        <p className="text-sm" style={{ color: TOKENS.textDim }}>Pulling the latest network state…</p>
-      </div>
-    );
-  }
-
-  if (state === "error") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <div
-          className="flex h-14 w-14 items-center justify-center rounded-2xl"
-          style={{ backgroundColor: `${TOKENS.riskHigh}14`, border: `1px solid ${TOKENS.riskHigh}40` }}
-        >
-          <AlertTriangle size={24} style={{ color: TOKENS.riskHigh }} />
-        </div>
-        <p className="text-sm font-medium" style={{ color: TOKENS.text }}>Unable to load network</p>
-        <p className="max-w-xs text-xs" style={{ color: TOKENS.textDim }}>
-          We couldn't retrieve the supply-chain network. Check your connection and try again.
-        </p>
-        <button
-          onClick={onRetry}
-          className="mt-1 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium"
-          style={{ backgroundColor: `${TOKENS.riskHigh}18`, color: TOKENS.riskHigh, border: `1px solid ${TOKENS.riskHigh}45` }}
-        >
-          <RefreshCw size={13} />
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  if (state === "empty") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <div
-          className="flex h-14 w-14 items-center justify-center rounded-2xl"
-          style={{ backgroundColor: `${TOKENS.brand}14`, border: `1px solid ${TOKENS.brand}40` }}
-        >
-          <Wind size={24} style={{ color: TOKENS.brand }} />
-        </div>
-        <p className="text-sm font-medium" style={{ color: TOKENS.text }}>No network graph loaded yet</p>
-        <p className="max-w-xs text-xs" style={{ color: TOKENS.textDim }}>
-          Once the graph service connects, the supply chain map renders here — nodes, routes,
-          and live disruption ripples.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full items-center justify-center">
-      <p className="text-xs" style={{ color: TOKENS.textDim }}>
-        Graph canvas mounts here — reserved for React Flow / D3 rendering.
-      </p>
-    </div>
-  );
-}
-
 function NodeDetailsBody({ node }) {
   if (!node) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 py-6 text-center">
+      <div className="node-empty-state">
         <MapPin size={22} style={{ color: TOKENS.textDim }} />
-        <p className="text-sm" style={{ color: TOKENS.text }}>No node selected</p>
-        <p className="text-xs" style={{ color: TOKENS.textDim }}>
+        <p className="node-empty-title" style={{ color: TOKENS.text }}>No node selected</p>
+        <p className="node-empty-desc" style={{ color: TOKENS.textDim }}>
           Search for a node above, or click one on the map once the graph is connected.
         </p>
       </div>
@@ -633,32 +501,25 @@ function NodeDetailsBody({ node }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="node-details-content">
       <div>
-        <p className="text-sm font-medium" style={{ color: TOKENS.text }}>{node.name}</p>
-        <p className="text-xs" style={{ color: TOKENS.textDim }}>{node.type} · {node.region}</p>
+        <p className="node-title" style={{ color: TOKENS.text }}>{node.name}</p>
+        <p className="node-subtitle" style={{ color: TOKENS.textDim }}>{node.type} · {node.region}</p>
       </div>
 
       <RiskBadge level={node.risk} />
 
-      <div
-        className="rounded-lg p-3 text-xs leading-relaxed"
-        style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}`, color: TOKENS.textDim }}
-      >
+      <div className="node-note-box" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}`, color: TOKENS.textDim }}>
         {node.note}
       </div>
 
-      <dl className="flex flex-col gap-2 text-xs">
-        <div className="flex items-center justify-between">
-          <dt className="flex items-center gap-1.5" style={{ color: TOKENS.textDim }}>
-            <Boxes size={13} /> Connections
-          </dt>
-          <dd className="font-mono" style={{ color: TOKENS.text }}>{node.connections}</dd>
+      <dl className="node-meta-list">
+        <div className="node-meta-row">
+          <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Boxes size={13} /> Connections</dt>
+          <dd className="node-meta-value" style={{ color: TOKENS.text }}>{node.connections}</dd>
         </div>
-        <div className="flex items-center justify-between">
-          <dt className="flex items-center gap-1.5" style={{ color: TOKENS.textDim }}>
-            <Clock size={13} /> Last updated
-          </dt>
+        <div className="node-meta-row">
+          <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Clock size={13} /> Last updated</dt>
           <dd style={{ color: TOKENS.text }}>{node.updated}</dd>
         </div>
       </dl>
@@ -668,13 +529,8 @@ function NodeDetailsBody({ node }) {
 
 function NodeDetailsPanel({ node }) {
   return (
-    <aside
-      className="hidden w-80 shrink-0 flex-col overflow-y-auto border-l p-5 lg:flex"
-      style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}
-    >
-      <h2 className="mb-4 text-xs font-medium uppercase tracking-wider" style={{ color: TOKENS.textDim }}>
-        Node details
-      </h2>
+    <aside className="node-panel" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
+      <h2 className="node-panel-heading" style={{ color: TOKENS.textDim }}>Node details</h2>
       <NodeDetailsBody node={node} />
     </aside>
   );
@@ -683,17 +539,12 @@ function NodeDetailsPanel({ node }) {
 function NodeDetailsSheet({ node, onClose }) {
   if (!node) return null;
   return (
-    <div className="fixed inset-0 z-40 lg:hidden">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div
-        className="absolute inset-x-0 bottom-0 max-h-[75vh] overflow-y-auto rounded-t-2xl p-5 pb-8"
-        style={{ backgroundColor: TOKENS.surface, borderTop: `1px solid ${TOKENS.border}` }}
-      >
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full" style={{ backgroundColor: TOKENS.border }} />
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xs font-medium uppercase tracking-wider" style={{ color: TOKENS.textDim }}>
-            Node details
-          </h2>
+    <div className="node-sheet-overlay">
+      <div className="node-sheet-backdrop" onClick={onClose} />
+      <div className="node-sheet-panel" style={{ backgroundColor: TOKENS.surface, borderTop: `1px solid ${TOKENS.border}` }}>
+        <div className="node-sheet-handle" style={{ backgroundColor: TOKENS.border }} />
+        <div className="node-sheet-header">
+          <h2 className="node-panel-heading" style={{ color: TOKENS.textDim, margin: 0 }}>Node details</h2>
           <button onClick={onClose} style={{ color: TOKENS.textDim }} aria-label="Close">
             <X size={18} />
           </button>
@@ -704,17 +555,16 @@ function NodeDetailsSheet({ node, onClose }) {
   );
 }
 
-export default function AtmoGraphDashboard() {
+export default function DashboardPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [canvasState, setCanvasState] = useState("loading");
   const [fontsReady, setFontsReady] = useState(false);
 
   useEffect(() => {
     const link = document.createElement("style");
     link.textContent = `
       @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-      :focus-visible { outline: 2px solid ${TOKENS.brand}; outline-offset: 2px; border-radius: 4px; }
+      :focus-visible { outline: 2px solid ${TOKENS.brand}; outline-offset: 2px; }
     `;
     document.head.appendChild(link);
     setFontsReady(true);
@@ -731,34 +581,21 @@ export default function AtmoGraphDashboard() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selectedNode, mobileNavOpen]);
 
-  // Simulates the real lifecycle this will follow once the graph service
-  // exists: loading -> empty (no live data yet) or error (connection failed).
-  // DEMO_SIMULATE_ERRORS gates the fake failure — flip to false (or delete
-  // this branch) once real fetch/socket status drives canvasState instead.
-  const attemptLoad = useCallback(() => {
-    setCanvasState("loading");
-    const outcome = DEMO_SIMULATE_ERRORS && Math.random() < 0.15 ? "error" : "empty";
-    setTimeout(() => setCanvasState(outcome), 900);
-  }, []);
-
-  useEffect(() => {
-    attemptLoad();
-  }, [attemptLoad]);
-
   return (
-    <div
-      className="flex h-screen w-full flex-col"
-      style={{ backgroundColor: TOKENS.bg, fontFamily: "'Inter', sans-serif", opacity: fontsReady ? 1 : 0 }}
-    >
+    <div className="app-shell" style={{ backgroundColor: TOKENS.bg, fontFamily: "'Inter', sans-serif", opacity: fontsReady ? 1 : 0 }}>
       <Header onMenuClick={() => setMobileNavOpen(true)} />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="dashboard-body">
         <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="main-content">
           <ControlsBar onSelectNode={setSelectedNode} />
-          <div className="min-h-0 flex-1">
-            <GraphCanvas state={canvasState} onRetry={attemptLoad} />
+          <div className="graph-canvas-wrapper">
+            {/* Shared graph component — owns its own loading/empty/error/ready
+                states during integration. Wire its node-click callback (once
+                it exposes one) to setSelectedNode to replace the search-only
+                selection path below. */}
+            <GraphCanvas />
           </div>
         </main>
 
