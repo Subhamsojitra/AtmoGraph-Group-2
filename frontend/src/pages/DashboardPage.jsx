@@ -2,23 +2,31 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Menu, X, Search, ZoomIn, ZoomOut, Maximize2, SlidersHorizontal, Hand,
   LayoutGrid, Bell, AlertTriangle, Activity, MapPin, Boxes, Clock,
-  ChevronRight, Radio, FileText, Database, Settings, Wind,
+  ChevronRight, Radio, FileText, Database, Settings, Wind, Flag, History, Tag,
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas"; // TODO: confirm this relative path matches
                                                  // DashboardPage.jsx's real location in the repo
-import "../DashboardPage.css";
+import "../DashboardPage.css"; // TODO: confirm this relative path matches
 
 /* ============================================================
-   AtmoGraph — Week 1 Frontend Foundation (Yashaswini's scope)
+   AtmoGraph — Week 2 (Yashaswini's scope)
 
-   Changes for this PR, per teammate review:
-   - Removed the local GraphCanvas placeholder + its simulated
-     loading/error lifecycle. This now renders the shared
-     src/graph/GraphCanvas.jsx directly; that component owns its
-     own loading/empty/error/ready states during integration.
-   - Removed Tailwind. All layout/spacing now lives in
-     DashboardPage.css; per-instance colors (from TOKENS) stay as
-     inline styles since they were never Tailwind classes.
+   Added this pass:
+   - Node click interaction UI: a selection chip in the controls
+     bar reflects whatever node is selected (from search today,
+     from the real graph once GraphCanvas exposes a click callback)
+     with a one-click way to clear it.
+   - Zoom/pan controls UI: zoom now has real local state (25–200%,
+     a readout, a reset-to-100% "fit" action) and an onZoomChange
+     callback so the architecture side can wire it to the actual
+     graph transform during integration.
+   - Selected-node styling: nodeStates.js + the "Graph node states"
+     block in DashboardPage.css define the hover/selected/risk
+     classes GraphCanvas should apply to its own nodes.
+   - Supplier/node details panel: added category, tier, and lead
+     time, plus a presentational actions row.
+   - Search/filter interface: filters now actually narrow search
+     results, with removable filter chips summarizing what's active.
    ============================================================ */
 
 const TOKENS = {
@@ -42,10 +50,11 @@ const NAV_ITEMS = [
   { icon: Settings, label: "Settings" },
 ];
 
-const RISK_OPTIONS = ["All", "High", "Medium", "Low"];
+const RISK_OPTIONS = ["All", "High", "Elevated", "Stable"];
+const RISK_VALUE_MAP = { All: "all", High: "high", Elevated: "low", Stable: "none" };
 const TYPE_OPTIONS = ["Supplier", "Warehouse", "Port"];
 
-// Local mock dataset — stands in for a real node-search API in Week 1.
+// Local mock dataset — stands in for a real node-search API in Week 1/2.
 const MOCK_NODES = [
   {
     id: "rtm-04",
@@ -55,6 +64,9 @@ const MOCK_NODES = [
     risk: "high",
     connections: 214,
     updated: "2 min ago",
+    category: "Logistics Hub",
+    tier: "Tier 1",
+    leadTime: "N/A",
     note: "Linked to a reported dockworker strike. Downstream electronics shipments to North America are the primary exposure.",
   },
   {
@@ -65,6 +77,9 @@ const MOCK_NODES = [
     risk: "low",
     connections: 138,
     updated: "9 min ago",
+    category: "Electronics",
+    tier: "Tier 1",
+    leadTime: "18 days",
     note: "Minor customs delay reported. No production impact expected if cleared within 48 hours.",
   },
   {
@@ -75,6 +90,9 @@ const MOCK_NODES = [
     risk: "none",
     connections: 96,
     updated: "24 min ago",
+    category: "Distribution",
+    tier: "Tier 2",
+    leadTime: "3 days",
     note: "Operating normally. No upstream disruptions currently mapped to this node.",
   },
   {
@@ -85,6 +103,9 @@ const MOCK_NODES = [
     risk: "low",
     connections: 172,
     updated: "17 min ago",
+    category: "Logistics Hub",
+    tier: "Tier 1",
+    leadTime: "N/A",
     note: "Elevated congestion from rerouted Rotterdam traffic. Monitoring for further backlog.",
   },
 ];
@@ -259,7 +280,7 @@ function Sidebar({ mobileOpen, onClose }) {
   );
 }
 
-function SearchBar({ onSelect }) {
+function SearchBar({ onSelect, risk, types }) {
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(false);
   const containerRef = useRef(null);
@@ -280,7 +301,13 @@ function SearchBar({ onSelect }) {
   }, []);
 
   const results = query.trim()
-    ? MOCK_NODES.filter((n) => n.name.toLowerCase().includes(query.trim().toLowerCase()))
+    ? MOCK_NODES.filter((n) => {
+        const matchesQuery = n.name.toLowerCase().includes(query.trim().toLowerCase());
+        const riskValue = RISK_VALUE_MAP[risk];
+        const matchesRisk = riskValue === "all" || n.risk === riskValue;
+        const matchesType = types.length === 0 || types.includes(n.type);
+        return matchesQuery && matchesRisk && matchesType;
+      })
     : [];
   const showDropdown = focused && query.trim().length > 0;
 
@@ -344,10 +371,8 @@ function SearchBar({ onSelect }) {
   );
 }
 
-function FilterPanel() {
+function FilterPanel({ risk, setRisk, types, setTypes }) {
   const [open, setOpen] = useState(false);
-  const [risk, setRisk] = useState("All");
-  const [types, setTypes] = useState([]);
   const containerRef = useRef(null);
 
   useEffect(() => {
@@ -449,41 +474,117 @@ function FilterPanel() {
   );
 }
 
-function ControlsBar({ onSelectNode }) {
+function RiskLegend() {
+  const items = [
+    { label: "Stable", color: TOKENS.flow },
+    { label: "Elevated", color: TOKENS.riskLow },
+    { label: "High risk", color: TOKENS.riskHigh },
+  ];
+  return (
+    <div className="risk-legend" aria-label="Risk color legend">
+      {items.map((i) => (
+        <span key={i.label} className="risk-legend-item" style={{ color: TOKENS.textDim }}>
+          <span className="risk-legend-dot" style={{ backgroundColor: i.color }} />
+          {i.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChange }) {
   const [panActive, setPanActive] = useState(false);
+  const [zoom, setZoom] = useState(100);
+  const [risk, setRisk] = useState("All");
+  const [types, setTypes] = useState([]);
+
+  const changeZoom = (next) => {
+    const clamped = Math.max(25, Math.min(200, next));
+    setZoom(clamped);
+    onZoomChange?.(clamped);
+  };
+
+  const toggleType = (t) => setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  const activeFilterChips = [
+    ...(risk !== "All" ? [{ key: "risk", label: risk, clear: () => setRisk("All") }] : []),
+    ...types.map((t) => ({ key: `type-${t}`, label: t, clear: () => toggleType(t) })),
+  ];
 
   return (
-    <div className="controls-bar" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
-      <SearchBar onSelect={onSelectNode} />
+    <>
+      <div className="controls-bar" style={{ backgroundColor: TOKENS.surface, borderColor: TOKENS.border }}>
+        <SearchBar onSelect={onSelectNode} risk={risk} types={types} />
 
-      <div className="controls-zoom-group">
-        <button
-          onClick={() => setPanActive((p) => !p)}
-          title="Pan"
-          aria-label="Toggle pan mode"
-          aria-pressed={panActive}
-          className="pan-btn"
-          style={{
-            color: panActive ? TOKENS.brand : TOKENS.textDim,
-            border: `1px solid ${panActive ? TOKENS.brand + "55" : TOKENS.border}`,
-            backgroundColor: panActive ? `${TOKENS.brand}14` : "transparent",
-          }}
-        >
-          <Hand size={15} />
-        </button>
-        {[
-          { icon: ZoomIn, label: "Zoom in" },
-          { icon: ZoomOut, label: "Zoom out" },
-          { icon: Maximize2, label: "Fit to screen" },
-        ].map(({ icon: Icon, label }) => (
-          <button key={label} title={label} aria-label={label} className="zoom-btn" style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}>
-            <Icon size={15} />
+        {selectedNode && (
+          <div className="selection-chip" style={{ backgroundColor: `${TOKENS.brand}14`, border: `1px solid ${TOKENS.brand}40`, color: TOKENS.brand }}>
+            {selectedNode.name}
+            <button onClick={onClearSelection} aria-label="Clear selected node" style={{ color: TOKENS.brand }}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        <div className="controls-zoom-group">
+          <button
+            onClick={() => setPanActive((p) => !p)}
+            title="Pan"
+            aria-label="Toggle pan mode"
+            aria-pressed={panActive}
+            className="pan-btn"
+            style={{
+              color: panActive ? TOKENS.brand : TOKENS.textDim,
+              border: `1px solid ${panActive ? TOKENS.brand + "55" : TOKENS.border}`,
+              backgroundColor: panActive ? `${TOKENS.brand}14` : "transparent",
+            }}
+          >
+            <Hand size={15} />
           </button>
-        ))}
+          <button
+            onClick={() => changeZoom(zoom - 25)}
+            title="Zoom out"
+            aria-label="Zoom out"
+            className="zoom-btn"
+            style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}
+          >
+            <ZoomOut size={15} />
+          </button>
+          <span className="zoom-readout" style={{ color: TOKENS.text }} aria-live="polite">{zoom}%</span>
+          <button
+            onClick={() => changeZoom(zoom + 25)}
+            title="Zoom in"
+            aria-label="Zoom in"
+            className="zoom-btn"
+            style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}
+          >
+            <ZoomIn size={15} />
+          </button>
+          <button
+            onClick={() => changeZoom(100)}
+            title="Fit to screen (reset zoom)"
+            aria-label="Fit to screen"
+            className="zoom-btn"
+            style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}` }}
+          >
+            <Maximize2 size={15} />
+          </button>
+        </div>
+
+        <FilterPanel risk={risk} setRisk={setRisk} types={types} setTypes={setTypes} />
       </div>
 
-      <FilterPanel />
-    </div>
+      <div className="active-filters-row" style={{ borderBottom: `1px solid ${TOKENS.border}`, backgroundColor: TOKENS.surface }}>
+        {activeFilterChips.map((chip) => (
+          <span key={chip.key} className="filter-chip" style={{ backgroundColor: `${TOKENS.brand}14`, border: `1px solid ${TOKENS.brand}40`, color: TOKENS.brand }}>
+            {chip.label}
+            <button onClick={chip.clear} aria-label={`Remove ${chip.label} filter`} style={{ color: TOKENS.brand }}>
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <RiskLegend />
+      </div>
+    </>
   );
 }
 
@@ -515,6 +616,18 @@ function NodeDetailsBody({ node }) {
 
       <dl className="node-meta-list">
         <div className="node-meta-row">
+          <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Tag size={13} /> Category</dt>
+          <dd style={{ color: TOKENS.text }}>{node.category}</dd>
+        </div>
+        <div className="node-meta-row">
+          <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Boxes size={13} /> Tier</dt>
+          <dd style={{ color: TOKENS.text }}>{node.tier}</dd>
+        </div>
+        <div className="node-meta-row">
+          <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><History size={13} /> Lead time</dt>
+          <dd style={{ color: TOKENS.text }}>{node.leadTime}</dd>
+        </div>
+        <div className="node-meta-row">
           <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Boxes size={13} /> Connections</dt>
           <dd className="node-meta-value" style={{ color: TOKENS.text }}>{node.connections}</dd>
         </div>
@@ -523,6 +636,17 @@ function NodeDetailsBody({ node }) {
           <dd style={{ color: TOKENS.text }}>{node.updated}</dd>
         </div>
       </dl>
+
+      <div className="node-actions-row">
+        <button className="node-action-btn" style={{ color: TOKENS.riskLow, border: `1px solid ${TOKENS.riskLow}45`, backgroundColor: `${TOKENS.riskLow}14` }}>
+          <Flag size={12} style={{ marginRight: 4, verticalAlign: "-2px" }} />
+          Flag for review
+        </button>
+        <button className="node-action-btn" style={{ color: TOKENS.textDim, border: `1px solid ${TOKENS.border}`, backgroundColor: "transparent" }}>
+          <History size={12} style={{ marginRight: 4, verticalAlign: "-2px" }} />
+          View shipment history
+        </button>
+      </div>
     </div>
   );
 }
@@ -589,12 +713,22 @@ export default function DashboardPage() {
         <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
 
         <main className="main-content">
-          <ControlsBar onSelectNode={setSelectedNode} />
+          <ControlsBar
+            onSelectNode={setSelectedNode}
+            selectedNode={selectedNode}
+            onClearSelection={() => setSelectedNode(null)}
+            onZoomChange={(z) => {
+              // TODO (integration): forward this to GraphCanvas's real zoom
+              // transform once it exposes a zoom prop/callback.
+            }}
+          />
           <div className="graph-canvas-wrapper">
             {/* Shared graph component — owns its own loading/empty/error/ready
                 states during integration. Wire its node-click callback (once
                 it exposes one) to setSelectedNode to replace the search-only
-                selection path below. */}
+                selection path below. Apply NODE_STATE_CLASS / NODE_RISK_CLASS
+                from ./nodeStates.js to individual nodes for hover/selected/
+                risk styling that matches the rest of the dashboard. */}
             <GraphCanvas />
           </div>
         </main>

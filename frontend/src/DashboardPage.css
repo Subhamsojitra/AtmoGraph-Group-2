@@ -117,6 +117,41 @@
 .filter-apply-btn { font-weight: 500; }
 .pan-btn { border-radius: 6px; padding: 8px; cursor: pointer; }
 
+.zoom-readout { display: flex; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; min-width: 42px; justify-content: center; user-select: none; }
+
+.selection-chip { display: flex; align-items: center; gap: 8px; border-radius: 9999px; padding: 4px 6px 4px 12px; font-size: 12px; }
+.selection-chip button { background: none; border: none; cursor: pointer; display: flex; align-items: center; padding: 4px; border-radius: 9999px; }
+
+.active-filters-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 16px 12px; }
+@media (min-width: 640px) { .active-filters-row { padding: 0 24px 12px; } }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 3px 6px 3px 10px; font-size: 11px; }
+.filter-chip button { background: none; border: none; cursor: pointer; display: flex; align-items: center; padding: 2px; }
+
+.node-actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.node-action-btn { border-radius: 6px; padding: 6px 10px; font-size: 11px; font-weight: 500; cursor: pointer; }
+
+.risk-legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.risk-legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.risk-legend-dot { height: 7px; width: 7px; border-radius: 9999px; flex-shrink: 0; }
+
+/* ---------- Graph node states (contract for GraphCanvas — see nodeStates.js) ---------- */
+.graph-node { transition: filter 0.15s ease, outline-color 0.15s ease; cursor: pointer; }
+.graph-node--hover { filter: brightness(1.18); }
+.graph-node--selected { outline: 2px solid #6E8CFF; outline-offset: 3px; border-radius: 4px; }
+.graph-node--risk-high { animation: node-pulse-high 1.8s ease-in-out infinite; }
+.graph-node--risk-low { animation: node-pulse-low 2.6s ease-in-out infinite; }
+@keyframes node-pulse-high {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(229, 72, 77, 0.55)); }
+  50% { filter: drop-shadow(0 0 5px rgba(229, 72, 77, 0.85)); }
+}
+@keyframes node-pulse-low {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(245, 184, 76, 0.4)); }
+  50% { filter: drop-shadow(0 0 4px rgba(245, 184, 76, 0.7)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-node--risk-high, .graph-node--risk-low { animation: none; }
+}
+
 /* ---------- Graph canvas slot ---------- */
 .graph-canvas-wrapper { min-height: 0; flex: 1; }
 
