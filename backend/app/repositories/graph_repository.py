@@ -256,6 +256,135 @@ class GraphRepository:
 
         return self.execute_read(query, parameters)
 
+    def find_downstream_neighbors(
+        self,
+        node_ids: list[str],
+        relationship_types: Optional[list[str]] = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Find nodes reachable via an *outgoing* relationship from any source.
+
+        This is a single-hop, directional (downstream) traversal used by the
+        risk propagation module (Module 10). A supply-chain risk flows from the
+        source entity toward the entities that depend on it, i.e. along outgoing
+        relationships (``(n)-[r]->(m)``).
+
+        The ``node_ids`` are bound as a parameter (never interpolated) and the
+        returned nodes are deduplicated. It is read-only and never creates data.
+
+        Args:
+            node_ids: Source node identifiers to expand one hop downstream.
+            relationship_types: Optional list of relationship types to follow.
+                When provided, only these relationship types are traversed.
+            limit: Maximum number of downstream neighbors to return.
+
+        Returns:
+            List of record dictionaries of the shape
+            ``{"node": <node>, "rel_type": str, "source_id": str}``.
+
+        Raises:
+            ValueError: If ``node_ids`` is empty/not a list of non-empty strings,
+                or ``limit`` is not a positive integer.
+            ServiceUnavailable: If Neo4j is unreachable.
+            Neo4jError: If the query execution fails.
+        """
+        if not isinstance(node_ids, list) or not node_ids:
+            raise ValueError("node_ids must be a non-empty list of node identifiers")
+        cleaned_ids = []
+        for node_id in node_ids:
+            if not isinstance(node_id, str) or not node_id.strip():
+                raise ValueError("node_ids must contain only non-empty strings")
+            cleaned_ids.append(node_id.strip())
+
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        rel_clause = ""
+        if relationship_types:
+            # Backtick-escape user-supplied type names, matching the existing
+            # :meth:`find_neighbors` convention. These are schema identifiers,
+            # used as literal relationship-type labels (Cypher does not allow
+            # relationship types as bind parameters).
+            valid_types = [
+                t.strip().replace("`", "")
+                for t in relationship_types
+                if isinstance(t, str) and t.strip()
+            ]
+            if valid_types:
+                rel_pattern = ":" + "|".join(f"`{t}`" for t in valid_types)
+                rel_clause = f"[r{rel_pattern}]"
+            else:
+                rel_clause = "[r]"
+        else:
+            rel_clause = "[r]"
+
+        query = (
+            "MATCH (n) WHERE n.id IN $node_ids "
+            f"MATCH (n)-{rel_clause}->(m) "
+            "WHERE NOT m.id IN $node_ids "
+            "RETURN DISTINCT m AS node, type(r) AS rel_type, n.id AS source_id "
+            "LIMIT $limit"
+        )
+
+        parameters = {"node_ids": cleaned_ids, "limit": limit}
+
+        return self.execute_read(query, parameters)
+
+    def find_entity_candidates(
+        self,
+        search_text: str,
+        labels: Optional[list[str]] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Search Neo4j graph nodes for potential entity resolution candidates.
+
+        This method executes parameterized Cypher queries matching node ``name``
+        or ``aliases`` attributes case-insensitively.
+
+        Args:
+            search_text: Text string to search against node names and aliases.
+            labels: Optional list of node labels to filter (e.g. ``["Port", "Supplier"]``).
+            limit: Maximum candidate records to return.
+
+        Returns:
+            List of raw candidate dictionaries from the database.
+
+        Raises:
+            ValueError: If ``search_text`` is empty or invalid.
+            ServiceUnavailable: If Neo4j is unreachable.
+        """
+        if not search_text or not isinstance(search_text, str):
+            raise ValueError("search_text must be a non-empty string")
+
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        cleaned_search = search_text.strip()
+        if not cleaned_search:
+            raise ValueError("search_text must not be whitespace-only")
+
+        label_clause = ""
+        if labels and isinstance(labels, list):
+            valid_labels = [l.strip() for l in labels if l and isinstance(l, str) and l.strip()]
+            if valid_labels:
+                formatted_labels = " OR ".join(f"n:`{lbl}`" for lbl in valid_labels)
+                label_clause = f"({formatted_labels}) AND "
+
+        query = (
+            f"MATCH (n) WHERE {label_clause}"
+            "(toLower(n.name) CONTAINS toLower($search_text) "
+            "OR ANY(alias IN coalesce(n.aliases, []) WHERE toLower(alias) CONTAINS toLower($search_text)) "
+            "OR toLower(n.id) = toLower($search_text)) "
+            "RETURN n LIMIT $limit"
+        )
+
+        parameters = {
+            "search_text": cleaned_search,
+            "limit": limit,
+        }
+
+        return self.execute_read(query, parameters)
+
     def run_graph_query(
         self,
         query: str,

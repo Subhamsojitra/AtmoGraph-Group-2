@@ -1,21 +1,23 @@
-"""News ingestion API routes for AtmoGraph (Module 6).
+"""News ingestion & NLP analysis API routes for AtmoGraph (Modules 6 & 7).
 
 This module exposes endpoints for ingesting external news articles and text
-documents. It delegates all business logic to
-:class:`app.services.nlp.ingestion_service.IngestionService` and does not
-directly access Neo4j or perform NLP processing.
+documents (Module 6) and for running Named Entity Recognition over article
+text (Module 7). It delegates all business logic to the service layer
+(:class:`app.services.nlp.ingestion_service.IngestionService` and
+:class:`app.services.nlp.ner_service.NERService`) and does not directly
+access Neo4j or run NLP models itself.
 
 Architecture:
 
     FastAPI
         ↓
-    News API (this module)
+    News/NLP API (this module)
         ↓
-    IngestionService
+    IngestionService | NERService
         ↓
-    Text Normalization
+    Text Normalization | Transformers NER model
         ↓
-    Structured Ingestion Result
+    Structured Ingestion/NER Result
 """
 
 from __future__ import annotations
@@ -23,10 +25,21 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from app.core.logger import get_logger
+from app.schemas.ner import NERAnalysisRequest, NERAnalysisResponse
 from app.schemas.news import NewsIngestRequest, NewsIngestResponse
+from app.schemas.risk import RiskLevelUpdateRequest, RiskStateUpdateResponse
+from app.services.nlp.exceptions import (
+    ModelUnavailableError,
+    NERProcessingError,
+    TextPreprocessingError,
+)
 from app.services.nlp.ingestion_service import IngestionService
+from app.services.nlp.ner_service import NERService
+from app.services.risk.exceptions import EntityNotFoundError
+from app.services.risk.risk_service import RiskService
 
 logger = get_logger(__name__)
 
@@ -46,6 +59,32 @@ def get_ingestion_service() -> IngestionService:
     acceptable for Module 6. Tests can override this dependency.
     """
     return IngestionService()
+
+
+# The NER service owns the heavy NLP model, which must be loaded exactly once
+# and reused across all requests (never per request). A module-level singleton
+# is therefore appropriate here, unlike the stateless IngestionService.
+_ner_service = NERService()
+
+
+def get_ner_service() -> NERService:
+    """Provide the shared :class:`NERService` singleton to route handlers.
+
+    The model is loaded lazily by :class:`NERModelManager` on first use and
+    then cached for the lifetime of the process. Tests override this
+    dependency with a lightweight fake model manager.
+    """
+    return _ner_service
+
+
+def get_risk_service() -> RiskService:
+    """Provide a :class:`RiskService` instance to the risk-update route.
+
+    The service is lightweight and stateless apart from its injected
+    :class:`GraphRepository`, so a new instance per request is fine. Tests
+    override this dependency to inject a mocked repository/service.
+    """
+    return RiskService()
 
 
 # --------------------------------------------------------------------------- #
@@ -79,3 +118,132 @@ def ingest_article(
             status_code=500,
             detail="An unexpected error occurred during ingestion.",
         ) from exc
+
+
+@router.post(
+    "/analyze",
+    response_model=NERAnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Analyze named entities in a news article",
+    description=(
+        "Normalize article text and run Named Entity Recognition. Returns "
+        "structured entity occurrences (text, label, character offsets, "
+        "confidence) with no database writes. Accepts an optional "
+        "article_id from a prior ingestion so the response can reference the "
+        "real Module 6 identifier."
+    ),
+    responses={
+        422: {"description": "Invalid input (empty, whitespace-only, or oversized text)"},
+        503: {"description": "NLP model is currently unavailable"},
+        500: {"description": "Unexpected NLP processing failure"},
+    },
+)
+def analyze_article(
+    payload: NERAnalysisRequest,
+    service: NERService = Depends(get_ner_service),
+) -> NERAnalysisResponse:
+    """Run NER over a news article and return structured entity results.
+
+    Error mapping (no stack traces or internals are exposed):
+    - 422: invalid/missing/oversized input (``TextPreprocessingError``/``ValueError``)
+    - 503: NLP model unavailable (``ModelUnavailableError``)
+    - 500: unexpected processing failure (``NERProcessingError`` or unknown)
+    """
+    try:
+        return service.analyze(payload)
+    except TextPreprocessingError as exc:
+        logger.warning("NER preprocessing error", extra={"error": str(exc)})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning("NER validation error", extra={"error": str(exc)})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ModelUnavailableError:
+        logger.error("NLP model unavailable during analysis")
+        raise HTTPException(
+            status_code=503,
+            detail="The NLP model is currently unavailable. Please try again later."
+        )
+    except NERProcessingError:
+        logger.error("NER processing failed")
+        raise HTTPException(
+            status_code=500,
+            detail="NLP processing failed unexpectedly."
+        )
+    except Exception:
+        logger.error("NER analysis failed", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred during NLP analysis."
+        )
+
+
+@router.post(
+    "/risk-update",
+    response_model=RiskStateUpdateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update risk state of a resolved entity",
+    description=(
+        "Accept a resolved entity from Module 8 and update its risk state in Neo4j. "
+        "Does not perform entity recognition or resolution. "
+        "Validates risk score and updates existing graph node properties."
+    ),
+    responses={
+        422: {"description": "Invalid input (invalid risk score or malformed payload)"},
+        404: {"description": "Entity node not found in graph"},
+        503: {"description": "Graph database service unavailable"},
+        500: {"description": "Unexpected internal error"},
+    },
+)
+def update_risk_state(
+    payload: RiskLevelUpdateRequest,
+    service: RiskService = Depends(get_risk_service),
+) -> RiskStateUpdateResponse:
+    """Update the risk state of a resolved entity.
+
+    Expects a resolved entity (``node_id`` from Module 8 entity resolution).
+    Updates the ``risk_score`` and ``risk_level`` properties on the existing
+    Neo4j node. Never performs entity recognition/resolution and never creates
+    nodes.
+
+    Error mapping:
+    - 200 + ``updated=False``: entity is unresolved (no node id)
+    - 422: invalid risk score (out of 0-100 range)
+    - 404: entity id provided but node does not exist in the graph
+    - 503: Neo4j unavailable
+    - 500: unexpected internal failure
+    """
+    try:
+        return service.update_risk_state(payload)
+    except EntityNotFoundError:
+        logger.warning(
+            "Risk update API: entity node not found",
+            extra={"entity_id": payload.entity_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity node not found in graph.",
+        )
+    except ServiceUnavailable:
+        logger.error("Risk update API: Neo4j service unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Graph database service is currently unavailable. "
+                "Please try again later."
+            ),
+        )
+    except Neo4jError as exc:
+        logger.error("Risk update API: Neo4j error", extra={"error": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected database error occurred.",
+        )
+    except ValueError as exc:
+        logger.warning("Risk update API: invalid input", extra={"error": str(exc)})
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except Exception as exc:
+        logger.error("Risk update API: unexpected error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected internal error occurred.",
+        )

@@ -10,6 +10,21 @@ pydantic
 pydantic-settings
 neo4j
 
+# NLP (Module 7 - preprocessing & NER)
+#
+# torch is the tensor backend required by transformers. Neither package is
+# downloaded by the application or by pytest; they must be installed as shown
+# in the README. The NER model weights themselves (NLP_MODEL_NAME, default
+# dslim/bert-base-NER) are installed out-of-band with:
+#
+#   python -c "from transformers import pipeline; \
+#     pipeline('token-classification', model='dslim/bert-base-NER', \
+#              aggregation_strategy='simple', device='cpu')"
+#
+# and are cached in the HuggingFace cache directory for offline reuse.
+torch
+transformers
+
 # Test dependencies
 httpx
 pytest
