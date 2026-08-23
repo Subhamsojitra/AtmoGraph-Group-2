@@ -6,6 +6,18 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-23 — Day 13: Week 2 Final Integration Validation & Mid-Project Review Readiness
+* **Work completed**:
+  - Performed a comprehensive integration audit to ensure the frontend meets all Week 2 requirements: data connectivity, pan/zoom interactions, click handlers, details panel rendering, and large-graph scalability.
+  - Identified and fixed a selection synchronization issue between `DashboardPage.jsx` and `GraphCanvas.jsx`. Passed `selectedNodeId` as a prop to `GraphCanvas` and implemented a dedicated, high-performance `useEffect` inside `GraphCanvas.jsx` to update highlighted nodes dynamically when selection is cleared (e.g. from the dashboard ControlsBar) or changed (e.g. from search) without restarting the D3 simulation.
+  - Confirmed `GraphCanvas` consumes the generic `{ nodes, links }` data contract, remaining backend-agnostic and independent of specific backend structures.
+  - Confirmed large graph scalability: benchmark dataset of ~2,000 nodes and ~3,000 links in `?mode=large` renders and ticks smoothly without browser freezes, utilizing synchronous pre-ticking, Barnes-Hut many-body optimization, and label suppression.
+  - Validated D3 lifecycle safety: confirmed `ResizeObserver` and simulation are correctly stopped/disconnected on unmount, and SVG child elements are cleared.
+  - Verified compatibility with FastAPI backend node structure (`id`, `label`, `properties`) retrieved from `/api/v1/graph/nodes` in backend mode, defaulting relationships safely to `[]` due to lack of bulk relationships API without generating extra `O(N)` queries.
+  - Confirmed build succeeds via `npm run build` and linter passes with 0 warnings/errors via `npm run lint`.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-22 — Day 12: Week 2 Integration & Stabilization
 * **Work completed**:
   - Reviewed current frontend/backend integration status and confirmed strict compliance with FastAPI endpoints (`GET /api/v1/graph/nodes` and backend structure).

@@ -8,7 +8,7 @@ import * as d3 from 'd3';
  * Consumes graph dataset passed via props from the host page.
  * Refined to use ref-based simulation persistence and D3 data join updates.
  */
-export default function GraphCanvas({ data, onNodeClick }) {
+export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
@@ -39,6 +39,8 @@ export default function GraphCanvas({ data, onNodeClick }) {
   // Data update and initialization effect
   useEffect(() => {
     if (!svgRef.current || !containerRef.current) return;
+
+    selectedNodeIdRef.current = selectedNodeId;
 
     let svg = d3.select(svgRef.current);
     let simulation = simulationRef.current;
@@ -344,7 +346,33 @@ export default function GraphCanvas({ data, onNodeClick }) {
     } else {
       simulation.alpha(0.3).restart();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, onNodeClick]);
+
+  // Sync selection styling when selectedNodeId changes
+  useEffect(() => {
+    const prevId = selectedNodeIdRef.current;
+    selectedNodeIdRef.current = selectedNodeId;
+    if (!simulationRef.current) return;
+
+    const safeNodes = data?.nodes || [];
+    const LARGE_GRAPH_THRESHOLD = 500;
+    const isLargeMode = safeNodes.length > LARGE_GRAPH_THRESHOLD;
+
+    const svg = d3.select(svgRef.current);
+    // Only update elements that changed selection state to avoid looping through thousands of nodes unnecessarily
+    svg.selectAll("g.node-group")
+      .filter(n => n && (n.id === prevId || n.id === selectedNodeId))
+      .each(function(n) {
+        const isSelected = selectedNodeId === n.id;
+        d3.select(this).select("circle")
+          .attr("stroke", isSelected ? "#3182ce" : "#fff")
+          .attr("stroke-width", isSelected ? 3 : 1.5);
+        d3.select(this).select("text")
+          .style("font-weight", isSelected ? "600" : "normal")
+          .style("display", isLargeMode ? (isSelected ? "block" : "none") : "block");
+      });
+  }, [selectedNodeId, data]);
 
   return (
     <div 

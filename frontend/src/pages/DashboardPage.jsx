@@ -846,7 +846,11 @@ export default function DashboardPage() {
             )}
 
             {!loading && !error && data && data.nodes.length > 0 && (
-              <GraphCanvas data={data} onNodeClick={setSelectedNode} />
+              <GraphCanvas 
+                data={data} 
+                selectedNodeId={selectedNode?.id} 
+                onNodeClick={setSelectedNode} 
+              />
             )}
           </div>
         </main>
