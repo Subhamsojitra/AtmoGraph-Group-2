@@ -6,6 +6,19 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-24 — Day 14: Prediction Data Integration Foundation
+* **Work completed**:
+  - Established a clean decoupled frontend prediction-data integration boundary in `predictionService.js` to isolate prediction API fetches.
+  - Inspected backend prediction logic and verified no GNN prediction models or FastAPI prediction endpoints are currently implemented.
+  - Clearly documented that prediction schemas are pending GNN implementation, marking fields like `predictedRisk` and `confidence` as temporary development/mock values.
+  - Structured prediction data mapping conceptually around the stable `prediction.nodeId -> graph node.id` relationship.
+  - Modified `DashboardPage.jsx` minimally at the state and data controller layer to import, fetch (`getPredictionData`), and manage prediction state without modifying layout, sidebar, header, search, filters, details panels, or styling.
+  - Passed `predictions` as a prop to `<GraphCanvas />`, and updated D3 node mapping inside `GraphCanvas.jsx` to optionally associate the matched prediction object with `node.prediction`.
+  - Confirmed that absence of prediction data fallback works gracefully (returns empty prediction array in backend mode) and never blocks graph rendering.
+  - Verified linter rules pass with 0 warnings/errors and product builds successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-23 — Day 13: Week 2 Final Integration Validation & Mid-Project Review Readiness
 * **Work completed**:
   - Performed a comprehensive integration audit to ensure the frontend meets all Week 2 requirements: data connectivity, pan/zoom interactions, click handlers, details panel rendering, and large-graph scalability.

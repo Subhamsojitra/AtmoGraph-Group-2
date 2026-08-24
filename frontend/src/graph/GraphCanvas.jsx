@@ -8,7 +8,7 @@ import * as d3 from 'd3';
  * Consumes graph dataset passed via props from the host page.
  * Refined to use ref-based simulation persistence and D3 data join updates.
  */
-export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
+export default function GraphCanvas({ data, selectedNodeId, onNodeClick, predictions = [] }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
@@ -129,13 +129,23 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
     const previousNodes = simulation.nodes() || [];
     const previousNodesMap = new Map(previousNodes.map(n => [n.id, n]));
 
+    // Map predictions by nodeId for quick lookup
+    const predictionsMap = new Map((predictions || []).map(p => [p.nodeId, p]));
+
     const nodes = safeNodes
       .filter(n => n && n.id !== undefined && n.id !== null)
       .map(d => {
         const prev = previousNodesMap.get(d.id);
+        const prediction = predictionsMap.get(d.id) || null;
+
+        const nodeObj = {
+          ...d,
+          prediction
+        };
+
         if (prev) {
           return {
-            ...d,
+            ...nodeObj,
             x: prev.x,
             y: prev.y,
             vx: prev.vx,
@@ -144,7 +154,7 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
             fy: prev.fy
           };
         }
-        return { ...d };
+        return nodeObj;
       });
 
     const nodeIds = new Set(nodes.map(n => n.id));
@@ -347,7 +357,7 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
       simulation.alpha(0.3).restart();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, onNodeClick]);
+  }, [data, onNodeClick, predictions]);
 
   // Sync selection styling when selectedNodeId changes
   useEffect(() => {

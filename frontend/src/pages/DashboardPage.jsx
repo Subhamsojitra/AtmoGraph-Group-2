@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
+import { getPredictionData } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -692,6 +693,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Prediction states for future integration
+  const [predictions, setPredictions] = useState([]);
+  const [_predictionsLoading, setPredictionsLoading] = useState(false);
+  const [_predictionsError, setPredictionsError] = useState(null);
+
   useEffect(() => {
     let active = true;
 
@@ -699,6 +705,9 @@ export default function DashboardPage() {
     setError(null);
     setData(null);
     setSelectedNode(null);
+    setPredictions([]);
+    setPredictionsLoading(true);
+    setPredictionsError(null);
 
     getGraphData(queryMode)
       .then((res) => {
@@ -710,6 +719,19 @@ export default function DashboardPage() {
         if (!active) return;
         setError(err.message || 'An error occurred while loading graph data.');
         setLoading(false);
+      });
+
+    getPredictionData(queryMode)
+      .then((res) => {
+        if (!active) return;
+        setPredictions(res?.predictions || []);
+        setPredictionsLoading(false);
+      })
+      .catch((err) => {
+        if (!active) return;
+        console.warn("Failed to load predictions:", err);
+        setPredictionsError(err.message || 'An error occurred while loading predictions.');
+        setPredictionsLoading(false);
       });
 
     return () => {
@@ -850,6 +872,7 @@ export default function DashboardPage() {
                 data={data} 
                 selectedNodeId={selectedNode?.id} 
                 onNodeClick={setSelectedNode} 
+                predictions={predictions}
               />
             )}
           </div>
