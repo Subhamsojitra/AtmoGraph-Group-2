@@ -493,17 +493,19 @@ function RiskLegend() {
   );
 }
 
-function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChange }) {
-  const [panActive, setPanActive] = useState(false);
-  const [zoom, setZoom] = useState(100);
+function ControlsBar({ 
+  onSelectNode, 
+  selectedNode, 
+  onClearSelection, 
+  zoom, 
+  panActive, 
+  onPanActiveChange,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom
+}) {
   const [risk, setRisk] = useState("All");
   const [types, setTypes] = useState([]);
-
-  const changeZoom = (next) => {
-    const clamped = Math.max(25, Math.min(200, next));
-    setZoom(clamped);
-    onZoomChange?.(clamped);
-  };
 
   const toggleType = (t) => setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
@@ -528,7 +530,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
 
         <div className="controls-zoom-group">
           <button
-            onClick={() => setPanActive((p) => !p)}
+            onClick={() => onPanActiveChange(!panActive)}
             title="Pan"
             aria-label="Toggle pan mode"
             aria-pressed={panActive}
@@ -542,7 +544,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
             <Hand size={15} />
           </button>
           <button
-            onClick={() => changeZoom(zoom - 25)}
+            onClick={onZoomOut}
             title="Zoom out"
             aria-label="Zoom out"
             className="zoom-btn"
@@ -552,7 +554,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
           </button>
           <span className="zoom-readout" style={{ color: TOKENS.text }} aria-live="polite">{zoom}%</span>
           <button
-            onClick={() => changeZoom(zoom + 25)}
+            onClick={onZoomIn}
             title="Zoom in"
             aria-label="Zoom in"
             className="zoom-btn"
@@ -561,7 +563,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
             <ZoomIn size={15} />
           </button>
           <button
-            onClick={() => changeZoom(100)}
+            onClick={onResetZoom}
             title="Fit to screen (reset zoom)"
             aria-label="Fit to screen"
             className="zoom-btn"
@@ -609,7 +611,13 @@ function NodeDetailsBody({ node }) {
         <p className="node-subtitle" style={{ color: TOKENS.textDim }}>{node.type || 'default'} · {node.region || node.properties?.region || 'Unknown region'}</p>
       </div>
 
-      <RiskBadge level={node.risk || node.properties?.risk || 'none'} />
+      <RiskBadge 
+        level={
+          node.risk || 
+          node.properties?.risk || 
+          (node.prediction ? (node.prediction.predictedLevel === 'high' ? 'high' : (node.prediction.predictedLevel === 'elevated' ? 'low' : 'none')) : 'none')
+        } 
+      />
 
       <div className="node-note-box" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}`, color: TOKENS.textDim }}>
         {node.note || node.properties?.description || node.properties?.note || 'No description available.'}
@@ -636,6 +644,26 @@ function NodeDetailsBody({ node }) {
           <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Clock size={13} /> Last updated</dt>
           <dd style={{ color: TOKENS.text }}>{node.updated || node.properties?.updated || 'N/A'}</dd>
         </div>
+        {node.prediction && (
+          <>
+            <div className="node-meta-row" style={{ borderTop: `1px dashed ${TOKENS.border}`, paddingTop: '8px', marginTop: '8px' }}>
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim, fontWeight: '600' }}>[Prediction Details]</dt>
+              <dd style={{ color: TOKENS.textDim }}></dd>
+            </div>
+            <div className="node-meta-row">
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Predicted Level</dt>
+              <dd style={{ color: TOKENS.text }}>{node.prediction.predictedLevel || 'N/A'}</dd>
+            </div>
+            <div className="node-meta-row">
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Predicted Risk</dt>
+              <dd style={{ color: TOKENS.text }}>{node.prediction.predictedRisk !== undefined ? `${node.prediction.predictedRisk}%` : 'N/A'}</dd>
+            </div>
+            <div className="node-meta-row">
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Confidence</dt>
+              <dd style={{ color: TOKENS.text }}>{node.prediction.confidence !== undefined ? `${(node.prediction.confidence * 100).toFixed(0)}%` : 'N/A'}</dd>
+            </div>
+          </>
+        )}
       </dl>
 
       <div className="node-actions-row">
@@ -684,6 +712,11 @@ export default function DashboardPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fontsReady, setFontsReady] = useState(false);
+
+  // Zoom and pan active states lifted from ControlsBar
+  const [zoom, setZoom] = useState(100);
+  const [panActive, setPanActive] = useState(false);
+  const graphRef = useRef(null);
 
   // Retrieve development mode parameter from URL (?mode=mock|backend|large)
   const queryMode = new URLSearchParams(window.location.search).get('mode') || 'mock';
@@ -760,6 +793,18 @@ export default function DashboardPage() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selectedNode, mobileNavOpen]);
 
+  const handleZoomIn = () => {
+    graphRef.current?.zoomIn();
+  };
+
+  const handleZoomOut = () => {
+    graphRef.current?.zoomOut();
+  };
+
+  const handleResetZoom = () => {
+    graphRef.current?.resetZoom();
+  };
+
   return (
     <div className="app-shell" style={{ backgroundColor: TOKENS.bg, fontFamily: "'Inter', sans-serif", opacity: fontsReady ? 1 : 0 }}>
       <Header onMenuClick={() => setMobileNavOpen(true)} />
@@ -772,10 +817,12 @@ export default function DashboardPage() {
             onSelectNode={setSelectedNode}
             selectedNode={selectedNode}
             onClearSelection={() => setSelectedNode(null)}
-            onZoomChange={(_z) => {
-              // TODO (integration): forward this to GraphCanvas's real zoom
-              // transform once it exposes a zoom prop/callback.
-            }}
+            zoom={zoom}
+            panActive={panActive}
+            onPanActiveChange={setPanActive}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onResetZoom={handleResetZoom}
           />
           <div className="graph-canvas-wrapper" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
             {loading && (
@@ -869,10 +916,13 @@ export default function DashboardPage() {
 
             {!loading && !error && data && data.nodes.length > 0 && (
               <GraphCanvas 
+                ref={graphRef}
                 data={data} 
                 selectedNodeId={selectedNode?.id} 
                 onNodeClick={setSelectedNode} 
                 predictions={predictions}
+                onZoomLevelChange={setZoom}
+                panActive={panActive}
               />
             )}
           </div>

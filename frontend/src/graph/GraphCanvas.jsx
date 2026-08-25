@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 
 /**
@@ -8,7 +8,14 @@ import * as d3 from 'd3';
  * Consumes graph dataset passed via props from the host page.
  * Refined to use ref-based simulation persistence and D3 data join updates.
  */
-export default function GraphCanvas({ data, selectedNodeId, onNodeClick, predictions = [] }) {
+const GraphCanvas = forwardRef(({ 
+  data, 
+  selectedNodeId, 
+  onNodeClick, 
+  predictions = [],
+  onZoomLevelChange,
+  panActive
+}, ref) => {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
@@ -17,6 +24,45 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick, predict
   const gLinksRef = useRef(null);
   const gNodesRef = useRef(null);
   const selectedNodeIdRef = useRef(null);
+  const zoomRef = useRef(null);
+  const onZoomLevelChangeRef = useRef(onZoomLevelChange);
+
+  // Sync the callback ref
+  useEffect(() => {
+    onZoomLevelChangeRef.current = onZoomLevelChange;
+  }, [onZoomLevelChange]);
+
+  // Expose imperative methods to parent for programmatic controls
+  useImperativeHandle(ref, () => ({
+    zoomIn() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      const currentTransform = d3.zoomTransform(svgRef.current);
+      const currentPct = Math.round(currentTransform.k * 100);
+      const nextPct = Math.min(200, Math.max(25, Math.round((currentPct + 25) / 25) * 25));
+      const targetK = nextPct / 100;
+      
+      svg.transition().duration(250).call(zoomRef.current.scaleTo, targetK);
+      onZoomLevelChangeRef.current?.(nextPct);
+    },
+    zoomOut() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      const currentTransform = d3.zoomTransform(svgRef.current);
+      const currentPct = Math.round(currentTransform.k * 100);
+      const nextPct = Math.min(200, Math.max(25, Math.round((currentPct - 25) / 25) * 25));
+      const targetK = nextPct / 100;
+      
+      svg.transition().duration(250).call(zoomRef.current.scaleTo, targetK);
+      onZoomLevelChangeRef.current?.(nextPct);
+    },
+    resetZoom() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      svg.transition().duration(250).call(zoomRef.current.transform, d3.zoomIdentity);
+      onZoomLevelChangeRef.current?.(100);
+    }
+  }));
 
   // Mount/Unmount cleanup effect
   useEffect(() => {
@@ -63,10 +109,17 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick, predict
 
       // Define zoom and pan behavior
       const zoom = d3.zoom()
-        .scaleExtent([0.1, 8])
+        .scaleExtent([0.25, 2.0])
         .on("zoom", (event) => {
           gMain.attr("transform", event.transform);
+          // Sync zoom percentage back to parent state if it's a user interaction
+          if (event.sourceEvent && onZoomLevelChangeRef.current) {
+            const pct = Math.round(event.transform.k * 100);
+            const clamped = Math.max(25, Math.min(200, pct));
+            onZoomLevelChangeRef.current(clamped);
+          }
         });
+      zoomRef.current = zoom;
 
       // Bind zoom behavior to the SVG container
       svg.call(zoom);
@@ -388,9 +441,27 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick, predict
     <div 
       ref={containerRef} 
       className="graph-canvas-scaffold-boundary" 
-      style={{ width: '100%', height: '500px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#f7fafc', overflow: 'hidden' }}
+      style={{ 
+        width: '100%', 
+        height: '500px', 
+        border: '1px solid #e2e8f0', 
+        borderRadius: '6px', 
+        background: '#f7fafc', 
+        overflow: 'hidden',
+        cursor: panActive ? 'grab' : 'default'
+      }}
     >
-      <svg ref={svgRef} style={{ display: 'block' }}></svg>
+      <svg 
+        ref={svgRef} 
+        style={{ 
+          display: 'block', 
+          width: '100%', 
+          height: '100%',
+          cursor: panActive ? 'grab' : 'default'
+        }}
+      ></svg>
     </div>
   );
-}
+});
+
+export default GraphCanvas;

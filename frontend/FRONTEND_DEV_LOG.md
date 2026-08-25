@@ -6,6 +6,21 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-25 — Day 15: Prediction Integration Continuation & Graph Control Integration
+* **Work completed**:
+  - Investigated Yashaswini's graph controls (Zoom In, Zoom Out, Fit/Reset, Pan Mode) in `ControlsBar` and found they updated only local component state without communicating with D3's internal zoom transform.
+  - Lifted `zoom` and `panActive` state variables up to `DashboardPage.jsx` and connected them to `ControlsBar` via React props.
+  - Wrapped `GraphCanvas.jsx` in `forwardRef` and exposed programmatic zoom control methods (`zoomIn()`, `zoomOut()`, and `resetZoom()`) using `useImperativeHandle`.
+  - Kept the D3 zoom transform as the authoritative source of truth for the viewport scale and translate parameters, preventing React state rendering fights.
+  - Implemented event source checking using `event.sourceEvent` to synchronize interactive zoom gestures (scroll wheel, double-click) back to the dashboard's zoom percentage state, safely bypassing feedback loops.
+  - Bound the zoom scale extent to `[0.25, 2.0]` to match the UI controls bounds.
+  - Applied active pan state styling by showing a `grab` cursor over the SVG graph canvas when Pan Mode is toggled active.
+  - Preserved all existing D3 graph physics, ResizeObserver, node dragging, background panning, dynamic node type coloring, and large graph optimization configurations.
+  - Strengthened prediction mapping in `GraphCanvas` to keep predictions fully optional, and added optional generic prediction details rendering to the details panel `NodeDetailsBody` in `DashboardPage.jsx` without assuming any final ML risk schemas or indicators.
+  - Verified compilation via `npm run build` and resolved linting checks using `npm run lint` (0 warnings, 0 errors).
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-24 — Day 14: Prediction Data Integration Foundation
 * **Work completed**:
   - Established a clean decoupled frontend prediction-data integration boundary in `predictionService.js` to isolate prediction API fetches.
