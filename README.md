@@ -285,3 +285,63 @@ python -m pytest tests/test_risk_propagation_service.py -v  # unit (mocked repos
 python -m pytest tests/test_risk_propagation_api.py -v      # API (mocked service)
 python -m pytest tests/test_risk_propagation_neo4j.py -v    # real Neo4j integration (skipped when down)
 ```
+
+### Module 11 — Graph Data Preparation for GNN
+
+Module 11 turns the existing Neo4j supply-chain graph into a numerical,
+GNN-ready dataset. It implements **data preparation only** — no model,
+no training, no evaluation (those belong to Module 12+).
+
+Architecture (reuses every existing layer; no second driver/repository):
+
+```
+Existing Neo4j graph
+        ↓  GraphRepository.get_nodes / find_all_relationships (parameterized Cypher)
+app.ml.extraction       RawGraph + deterministic node-id → index mapping
+        ↓
+app.ml.features         NodeFeatureEncoder (fit/transform, stored parameters)
+        ↓
+app.ml.dataset          GraphDatasetBuilder → GraphDataset
+        ↓              (x float32 [N,F], edge_index int64 [2,E], y float32 [N])
+Module 12 — GNN model   (GraphDataset.to_pyg_data() when PyG is installed)
+```
+
+Discovered graph schema used by Module 11:
+
+| Item | Value |
+| --- | --- |
+| Node identifier | string property `id` (unique; validated, never guessed) |
+| Node properties | `id`, `name`, `aliases`, `risk_score`, `risk_level` |
+| Relationships | schema-neutral; supply-chain flow = outgoing `(a)-[r]->(b)` |
+| Canonical example type | `SUPPLIES` (same convention as Module 10) |
+
+INPUT FEATURES vs TARGET (leakage policy):
+
+| feature | source / encoding |
+| --- | --- |
+| `risk_score_norm` | Module 9 `risk_score`, min-max rescaled by config bounds |
+| `risk_level_code` | ordinal LOW=0 < MEDIUM=1 < HIGH=2 < CRITICAL=3 |
+| `label_code` | primary Neo4j label integer-encoded over a sorted vocabulary (index 0 = unseen) |
+| `out_degree_norm` / `in_degree_norm` | node degree scaled by fitted maximum |
+| **target** (`y`) | OPTIONAL, supplied via `build(target_property=...)`; **the database currently contains NO real target values**, so builds default to an unlabeled dataset (`y is None`). Synthetic labels exist ONLY in test fixtures. A labeled build requires a finite non-negative numeric property on EVERY node and hard-rejects using any feature name as the target. |
+
+Validation is strict (fail loudly, never corrupt): blank/duplicate node ids,
+dangling edges, out-of-range scores, NaN/inf values, missing targets,
+inconsistent shapes and empty graphs all raise `GraphDatasetError` subclasses.
+
+Dataset persistence uses `.npz` with `allow_pickle=False` both ways
+(`GraphDataset.to_npz` / `GraphDataset.load_npz`), carrying arrays plus the
+fitted `FeatureMetadata` JSON so inference reuses identical encoder parameters.
+Node indices are assigned over lexicographically sorted ids, making repeated
+builds byte-for-byte reproducible regardless of Neo4j row order.
+
+PyTorch Geometric is deliberately NOT in requirements.txt yet (see comments
+there); `GraphDataset.to_pyg_data()` raises a helpful `ImportError` until the
+Module 12 developer installs matching wheels for the installed torch build.
+
+Tests:
+
+```
+python -m pytest tests/test_gnn_dataset.py -q        # unit (mocked repository) - no Neo4j needed
+python -m pytest tests/test_gnn_dataset_neo4j.py -q  # real Neo4j integration (skipped when down)
+```

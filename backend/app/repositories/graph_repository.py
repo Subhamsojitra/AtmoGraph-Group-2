@@ -330,6 +330,64 @@ class GraphRepository:
 
         return self.execute_read(query, parameters)
 
+    def find_all_relationships(
+        self,
+        relationship_types: Optional[list[str]] = None,
+        limit: int = 50_000,
+    ) -> list[dict[str, Any]]:
+        """Extract every directed relationship as ``(source)->(target)`` rows.
+
+        Used by graph data preparation (Module 11) to obtain the full edge
+        list for the GNN dataset. Direction semantics match
+        :meth:`find_downstream_neighbors` exactly: supply-chain flow follows
+        OUTGOING relationships ``(a)-[r]->(b)``, so ``source_id`` depends on
+        nothing downstream of itself.
+
+        The optional ``relationship_types`` filter is provided by callers who
+        want to restrict extraction to known propagation relationships (the
+        Module 10 canonical example is ``SUPPLIES``). When omitted, every
+        relationship type present in the graph is returned.
+
+        Args:
+            relationship_types: Optional relationship-type whitelist.
+            limit: Maximum number of relationships to return.
+
+        Returns:
+            List of records shaped
+            ``{"source_id": str, "target_id": str, "rel_type": str}``.
+
+        Raises:
+            ValueError: If ``limit`` is not a positive integer.
+            ServiceUnavailable: If Neo4j is unreachable.
+            Neo4jError: If the query execution fails.
+        """
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+
+        rel_clause = "[r]"
+        if relationship_types:
+            # Backtick-escape type names after stripping backticks, matching
+            # the existing find_downstream_neighbors convention. Relationship
+            # types are schema identifiers and cannot be bind parameters.
+            valid_types = [
+                t.strip().replace("`", "")
+                for t in relationship_types
+                if isinstance(t, str) and t.strip()
+            ]
+            if valid_types:
+                rel_pattern = ":" + "|".join(f"`{t}`" for t in valid_types)
+                rel_clause = f"[r{rel_pattern}]"
+
+        query = (
+            f"MATCH (a)-{rel_clause}->(b) "
+            "RETURN a.id AS source_id, b.id AS target_id, "
+            "type(r) AS rel_type LIMIT $limit"
+        )
+        parameters = {"limit": limit}
+
+        return self.execute_read(query, parameters)
+
+
     def find_entity_candidates(
         self,
         search_text: str,
