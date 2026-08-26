@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
+import { getRiskState } from '../services/predictionService';
+import { NODE_RISK_CLASS } from '../nodeStates';
 
 /**
  * GraphCanvas Component
@@ -300,7 +302,20 @@ const GraphCanvas = forwardRef(({
       return typeColorMap.get(type) || '#718096';
     };
 
+    // Helper to determine risk class
+    const getRiskClass = (d) => {
+      const riskState = getRiskState(d.prediction);
+      return NODE_RISK_CLASS[riskState] || NODE_RISK_CLASS.none;
+    };
+
     // Apply properties to merged selections (entering + updating)
+    node
+      .attr("class", d => {
+        const isSelected = selectedNodeIdRef.current === d.id;
+        const riskClass = getRiskClass(d);
+        return `node-group graph-node ${isSelected ? 'graph-node--selected' : ''} ${riskClass}`;
+      });
+
     node.select("circle")
       .attr("fill", d => getNodeColor(d.type))
       .attr("stroke", d => (selectedNodeIdRef.current === d.id ? "#3182ce" : "#fff"))
@@ -355,6 +370,8 @@ const GraphCanvas = forwardRef(({
           .filter(n => n && (n.id === prevId || n.id === d.id))
           .each(function(n) {
             const isSelected = selectedNodeIdRef.current === n.id;
+            d3.select(this)
+              .classed("graph-node--selected", isSelected);
             d3.select(this).select("circle")
               .attr("stroke", isSelected ? "#3182ce" : "#fff")
               .attr("stroke-width", isSelected ? 3 : 1.5);
@@ -364,6 +381,7 @@ const GraphCanvas = forwardRef(({
           });
       })
       .on("mouseenter", function() {
+        d3.select(this).classed("graph-node--hover", true);
         d3.select(this).select("circle")
           .attr("stroke", "#3182ce")
           .attr("stroke-width", 3);
@@ -371,7 +389,8 @@ const GraphCanvas = forwardRef(({
           .style("font-weight", "600")
           .style("display", "block");
       })
-      .on("mouseleave", function(_event, d) {
+      .on("mouseleave", function(event, d) {
+        d3.select(this).classed("graph-node--hover", false);
         const isSelected = selectedNodeIdRef.current === d.id;
         d3.select(this).select("circle")
           .attr("stroke", isSelected ? "#3182ce" : "#fff")
@@ -428,6 +447,8 @@ const GraphCanvas = forwardRef(({
       .filter(n => n && (n.id === prevId || n.id === selectedNodeId))
       .each(function(n) {
         const isSelected = selectedNodeId === n.id;
+        d3.select(this)
+          .classed("graph-node--selected", isSelected);
         d3.select(this).select("circle")
           .attr("stroke", isSelected ? "#3182ce" : "#fff")
           .attr("stroke-width", isSelected ? 3 : 1.5);

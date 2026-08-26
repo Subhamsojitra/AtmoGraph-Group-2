@@ -139,17 +139,18 @@
 .graph-node--hover { filter: brightness(1.18); }
 .graph-node--selected { outline: 2px solid #6E8CFF; outline-offset: 3px; border-radius: 4px; }
 .graph-node--risk-high { animation: node-pulse-high 1.8s ease-in-out infinite; }
-.graph-node--risk-low { animation: node-pulse-low 2.6s ease-in-out infinite; }
+.graph-node--risk-medium { animation: node-pulse-medium 2.6s ease-in-out infinite; }
+.graph-node--risk-low { }
 @keyframes node-pulse-high {
   0%, 100% { filter: drop-shadow(0 0 0 rgba(229, 72, 77, 0.55)); }
   50% { filter: drop-shadow(0 0 5px rgba(229, 72, 77, 0.85)); }
 }
-@keyframes node-pulse-low {
+@keyframes node-pulse-medium {
   0%, 100% { filter: drop-shadow(0 0 0 rgba(245, 184, 76, 0.4)); }
   50% { filter: drop-shadow(0 0 4px rgba(245, 184, 76, 0.7)); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .graph-node--risk-high, .graph-node--risk-low { animation: none; }
+  .graph-node--risk-high, .graph-node--risk-medium { animation: none; }
 }
 
 /* ---------- Graph canvas slot ---------- */

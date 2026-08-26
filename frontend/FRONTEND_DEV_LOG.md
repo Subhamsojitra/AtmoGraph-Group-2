@@ -6,6 +6,20 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-26 — Day 16: Predictive Overlay & Risk Visualization Foundation
+* **Work completed**:
+  - Implemented the prediction-to-risk mapping boundary in `predictionService.js` via `getRiskState(prediction)`. Centralized prediction interpretation here to return `'high'`, `'medium'`, `'low'`, or `'unknown'`.
+  - Added custom styling for the new `'medium'` risk state (`graph-node--risk-medium`) using the yellow pulsing animation.
+  - Adjusted `graph-node--risk-low` to represent stable/low risk, removing the pulsing shadow to correctly distinguish stable nodes from elevated risk nodes.
+  - Integrated prediction styling with D3 in `GraphCanvas.jsx` by dynamically applying CSS classes (`graph-node`, `graph-node--selected`, `graph-node--risk-high`, `graph-node--risk-medium`, `graph-node--risk-low`) during the node data join.
+  - Ensured prediction visual highlights do not override selection outlines (`#6E8CFF` outline-offset) or break node drag-and-drop.
+  - Refactored `RiskLegend` labels in `DashboardPage.jsx` to read "At Risk", "Elevated", and "Stable / No prediction", matching the updated visual treatment.
+  - Modified `NodeDetailsBody` in `DashboardPage.jsx` to dynamically render prediction details generically. It iterates over all non-`nodeId` keys of the prediction object and formats known temporary fields (`predictedRisk`, `confidence`, `timestamp`, `predictedLevel`) nicely.
+  - Preserved Day 15 Zoom/Pan/Drag gestures and Day 9 D3 large-graph performance optimizations intact.
+  - Verified linter rules pass with 0 warnings/errors and product builds successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-25 — Day 15: Prediction Integration Continuation & Graph Control Integration
 * **Work completed**:
   - Investigated Yashaswini's graph controls (Zoom In, Zoom Out, Fit/Reset, Pan Mode) in `ControlsBar` and found they updated only local component state without communicating with D3's internal zoom transform.

@@ -52,8 +52,6 @@ export async function getPredictionData(mode = 'mock') {
     });
   }
 
-  // Default: 'mock' mode with staticGraphData nodes.
-  // Returns temporary mock fields for node-1 and node-2 to validate data propagation.
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
@@ -77,3 +75,33 @@ export async function getPredictionData(mode = 'mock') {
     }, 600);
   });
 }
+
+/**
+ * Maps a prediction object to a normalized risk visualization state.
+ * Possible returned states:
+ *   - 'high' (at-risk)
+ *   - 'medium' (elevated)
+ *   - 'low' (stable)
+ *   - 'unknown' (no prediction / default)
+ * 
+ * @param {Object} prediction - The prediction object from the API.
+ * @returns {string} One of: 'high', 'medium', 'low', 'unknown'
+ */
+export function getRiskState(prediction) {
+  if (!prediction) return 'unknown';
+  
+  // Normalize based on temporary mock predictedLevel fields.
+  // This centralizes prediction interpretation.
+  const level = prediction.predictedLevel;
+  if (level === 'high') {
+    return 'high';
+  }
+  if (level === 'elevated' || level === 'medium') {
+    return 'medium';
+  }
+  if (level === 'stable' || level === 'low') {
+    return 'low';
+  }
+  return 'unknown';
+}
+

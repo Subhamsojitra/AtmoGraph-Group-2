@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
-import { getPredictionData } from "../services/predictionService";
+import { getPredictionData, getRiskState } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -477,9 +477,9 @@ function FilterPanel({ risk, setRisk, types, setTypes }) {
 
 function RiskLegend() {
   const items = [
-    { label: "Stable", color: TOKENS.flow },
+    { label: "At Risk", color: TOKENS.riskHigh },
     { label: "Elevated", color: TOKENS.riskLow },
-    { label: "High risk", color: TOKENS.riskHigh },
+    { label: "Stable / No prediction", color: TOKENS.flow },
   ];
   return (
     <div className="risk-legend" aria-label="Risk color legend">
@@ -615,7 +615,7 @@ function NodeDetailsBody({ node }) {
         level={
           node.risk || 
           node.properties?.risk || 
-          (node.prediction ? (node.prediction.predictedLevel === 'high' ? 'high' : (node.prediction.predictedLevel === 'elevated' ? 'low' : 'none')) : 'none')
+          (node.prediction ? (getRiskState(node.prediction) === 'high' ? 'high' : (getRiskState(node.prediction) === 'medium' ? 'low' : 'none')) : 'none')
         } 
       />
 
@@ -644,24 +644,44 @@ function NodeDetailsBody({ node }) {
           <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Clock size={13} /> Last updated</dt>
           <dd style={{ color: TOKENS.text }}>{node.updated || node.properties?.updated || 'N/A'}</dd>
         </div>
-        {node.prediction && (
+        {node.prediction && Object.keys(node.prediction).filter(k => k !== 'nodeId').length > 0 && (
           <>
             <div className="node-meta-row" style={{ borderTop: `1px dashed ${TOKENS.border}`, paddingTop: '8px', marginTop: '8px' }}>
-              <dt className="node-meta-label" style={{ color: TOKENS.textDim, fontWeight: '600' }}>[Prediction Details]</dt>
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim, fontWeight: '600' }}>Prediction Details</dt>
               <dd style={{ color: TOKENS.textDim }}></dd>
             </div>
-            <div className="node-meta-row">
-              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Predicted Level</dt>
-              <dd style={{ color: TOKENS.text }}>{node.prediction.predictedLevel || 'N/A'}</dd>
-            </div>
-            <div className="node-meta-row">
-              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Predicted Risk</dt>
-              <dd style={{ color: TOKENS.text }}>{node.prediction.predictedRisk !== undefined ? `${node.prediction.predictedRisk}%` : 'N/A'}</dd>
-            </div>
-            <div className="node-meta-row">
-              <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> Confidence</dt>
-              <dd style={{ color: TOKENS.text }}>{node.prediction.confidence !== undefined ? `${(node.prediction.confidence * 100).toFixed(0)}%` : 'N/A'}</dd>
-            </div>
+            {Object.entries(node.prediction)
+              .filter(([key, val]) => key !== 'nodeId' && val !== undefined && val !== null && val !== '')
+              .map(([key, val]) => {
+                let label = key
+                  .replace(/([A-Z])/g, ' $1')
+                  .replace(/^./, str => str.toUpperCase());
+                
+                let formattedVal = val;
+                if (key === 'predictedRisk' && typeof val === 'number') {
+                  formattedVal = `${val}%`;
+                  label = "Predicted Risk";
+                } else if (key === 'confidence' && typeof val === 'number') {
+                  formattedVal = `${(val * 100).toFixed(0)}%`;
+                  label = "Confidence";
+                } else if (key === 'timestamp') {
+                  label = "Updated";
+                  try {
+                    formattedVal = new Date(val).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                  } catch {
+                    formattedVal = String(val);
+                  }
+                } else if (key === 'predictedLevel') {
+                  label = "Predicted Level";
+                }
+
+                return (
+                  <div className="node-meta-row" key={key}>
+                    <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> {label}</dt>
+                    <dd style={{ color: TOKENS.text }}>{formattedVal}</dd>
+                  </div>
+                );
+              })}
           </>
         )}
       </dl>
