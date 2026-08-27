@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
-import { getPredictionData, getRiskState } from "../services/predictionService";
+import { getPredictionData, getNodeRiskState } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -144,11 +144,12 @@ function ContourBackground() {
 
 function RiskBadge({ level }) {
   const map = {
-    high: { color: TOKENS.riskHigh, label: "High risk" },
-    low: { color: TOKENS.riskLow, label: "Elevated" },
-    none: { color: TOKENS.flow, label: "Stable" },
+    high: { color: TOKENS.riskHigh, label: "At Risk" },
+    medium: { color: TOKENS.riskLow, label: "Elevated" },
+    low: { color: TOKENS.flow, label: "Stable" },
+    unknown: { color: TOKENS.flow, label: "Stable / No prediction" },
   };
-  const s = map[level] || map.none;
+  const s = map[level] || map.unknown;
   return (
     <span
       className="risk-badge"
@@ -362,7 +363,7 @@ function SearchBar({ onSelect, risk, types }) {
                   <span className="search-result-name" style={{ color: TOKENS.text }}>{n.name}</span>
                   <span className="search-result-region" style={{ color: TOKENS.textDim }}>{n.region}</span>
                 </span>
-                <RiskBadge level={n.risk} />
+                <RiskBadge level={getNodeRiskState(n)} />
               </button>
             ))
           )}
@@ -611,13 +612,7 @@ function NodeDetailsBody({ node }) {
         <p className="node-subtitle" style={{ color: TOKENS.textDim }}>{node.type || 'default'} · {node.region || node.properties?.region || 'Unknown region'}</p>
       </div>
 
-      <RiskBadge 
-        level={
-          node.risk || 
-          node.properties?.risk || 
-          (node.prediction ? (getRiskState(node.prediction) === 'high' ? 'high' : (getRiskState(node.prediction) === 'medium' ? 'low' : 'none')) : 'none')
-        } 
-      />
+      <RiskBadge level={getNodeRiskState(node)} />
 
       <div className="node-note-box" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}`, color: TOKENS.textDim }}>
         {node.note || node.properties?.description || node.properties?.note || 'No description available.'}
@@ -657,17 +652,25 @@ function NodeDetailsBody({ node }) {
                   .replace(/([A-Z])/g, ' $1')
                   .replace(/^./, str => str.toUpperCase());
                 
-                let formattedVal = val;
+                let formattedVal;
+                if (typeof val === 'object' && val !== null) {
+                  formattedVal = JSON.stringify(val);
+                } else {
+                  formattedVal = String(val);
+                }
+
                 if (key === 'predictedRisk' && typeof val === 'number') {
-                  formattedVal = `${val}%`;
+                  const percentage = val <= 1 ? val * 100 : val;
+                  formattedVal = `${percentage.toFixed(0)}%`;
                   label = "Predicted Risk";
                 } else if (key === 'confidence' && typeof val === 'number') {
-                  formattedVal = `${(val * 100).toFixed(0)}%`;
+                  const percentage = val <= 1 ? val * 100 : val;
+                  formattedVal = `${percentage.toFixed(0)}%`;
                   label = "Confidence";
                 } else if (key === 'timestamp') {
-                  label = "Updated";
+                  label = "Prediction Time";
                   try {
-                    formattedVal = new Date(val).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    formattedVal = new Date(val).toLocaleString();
                   } catch {
                     formattedVal = String(val);
                   }

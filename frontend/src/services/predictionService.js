@@ -105,3 +105,37 @@ export function getRiskState(prediction) {
   return 'unknown';
 }
 
+/**
+ * Resolves and normalizes the risk state of a node.
+ * Returns one of: 'high', 'medium', 'low', 'unknown'
+ * 
+ * @param {Object} node - The node object
+ * @returns {string} One of: 'high', 'medium', 'low', 'unknown'
+ */
+export function getNodeRiskState(node) {
+  if (!node) return 'unknown';
+
+  // 1. If prediction data is available, it takes precedence.
+  if (node.prediction) {
+    return getRiskState(node.prediction);
+  }
+
+  // 2. Fall back to static risk fields on the node (e.g. from database or mock).
+  const rawRisk = node.risk || node.properties?.risk;
+  if (!rawRisk) return 'unknown';
+
+  const normalized = String(rawRisk).toLowerCase();
+  if (normalized === 'high') {
+    return 'high';
+  }
+  if (normalized === 'medium' || normalized === 'elevated' || normalized === 'low') {
+    // Note: raw node risk 'low' in Yashaswini's layout represents "Elevated"
+    return 'medium';
+  }
+  if (normalized === 'stable' || normalized === 'none') {
+    return 'low';
+  }
+  return 'unknown';
+}
+
+

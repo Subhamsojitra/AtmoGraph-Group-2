@@ -6,6 +6,19 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-27 — Day 17: Predictive Overlay Refinement & GNN Integration Readiness
+* **Work completed**:
+  - Refined the predictive overlay and centralized risk state normalization into `getNodeRiskState(node)` within `predictionService.js`.
+  - Updated visualization and info components to consume normalized risk states (`high`, `medium`, `low`, `unknown`), avoiding scattered prediction field checks.
+  - Refactored `RiskBadge` in `DashboardPage.jsx` to map normalized levels to their correct visual classes, background/text colors, and legend-aligned labels: "At Risk" (high), "Elevated" (medium), "Stable" (low), and "Stable / No prediction" (unknown).
+  - Streamlined dynamic prediction detail rendering in `NodeDetailsBody` to dynamically accept and format properties: formatted percentage confidence value cleanly for both decimals and integers, formatted timestamp to locale string under the label "Prediction Time", and formatted any potential nested objects/arrays as JSON strings to avoid crash risk.
+  - Maintained complete separation from Yashaswini's dashboard components and layout UI, preserving Header, Sidebar, ControlsBar, and existing CSS structure intact.
+  - Preserved Day 9 large-graph optimizations (~2,000 nodes/3,000 links performance) and Day 15 ref-based D3 programmatic zoom/pan controls.
+  - Kept Santanu's backend untouched; verified backend mode (`?mode=backend`) handles empty/missing predictions gracefully.
+  - Verified linter passes with 0 warnings/errors and production build compiles successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-26 — Day 16: Predictive Overlay & Risk Visualization Foundation
 * **Work completed**:
   - Implemented the prediction-to-risk mapping boundary in `predictionService.js` via `getRiskState(prediction)`. Centralized prediction interpretation here to return `'high'`, `'medium'`, `'low'`, or `'unknown'`.
