@@ -31,13 +31,17 @@ transformers
 # GNN dataset (it is already pulled in transitively by torch; it is listed
 # explicitly here because app.ml imports it directly).
 numpy
-# PyTorch Geometric is deliberately NOT added yet:
-#   * Module 11 only prepares data (features/edge_index/targets) and exposes a
-#     guarded GraphDataset.to_pyg_data() adapter that raises a helpful
-#     ImportError until PyG exists;
-#   * installing PyG requires matching wheels for the installed torch/CUDA
-#     combination, which belongs to Module 12 (GNN model), together with its
-#     own README install instructions.
+
+# GNN model architecture (Module 12 - node-level delay regression)
+#
+# torch_geometric (PyG) provides the GCNConv message-passing layers of
+# app.ml.model.GNNModel. The PyG CORE package is pure Python: GCNConv runs on
+# the native torch scatter ops, so the compiled companion wheels
+# (torch-scatter/torch-sparse) are NOT required for this project's model.
+# It must be compatible with the installed torch build (2.x CPU) and Python;
+# if pip cannot resolve it, install the wheel matching your torch version
+# (see https://pytorch-geometric.readthedocs.io > Installation).
+torch_geometric
 
 # Test dependencies
 httpx

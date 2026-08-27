@@ -1,7 +1,8 @@
-"""Machine-learning data preparation package for AtmoGraph (Module 11).
+"""Machine-learning package for AtmoGraph (Modules 11 & 12).
 
-This package turns the existing Neo4j supply-chain graph into a numerical,
-GNN-ready dataset. Its scope is deliberately limited to DATA PREPARATION:
+Module 11 turns the existing Neo4j supply-chain graph into a numerical,
+GNN-ready dataset. Module 12 adds the GNN model architecture that consumes
+it. Scope of this package:
 
     Existing Neo4j Graph
         |   GraphRepository.get_nodes / find_all_relationships
@@ -16,11 +17,13 @@ GNN-ready dataset. Its scope is deliberately limited to DATA PREPARATION:
     Edge index / targets / validation     (app.ml.dataset.GraphDatasetBuilder)
         v
     GNN-ready GraphDataset                (app.ml.dataset.GraphDataset,
-                                           .npz serialization, optional
-                                           PyTorch Geometric export)
-
-Feeding Module 12 (GNN model) happens LATER; nothing in this package trains,
-evaluates, or serves a model.
+                                           .npz serialization, PyTorch
+                                           Geometric export)
+        v
+    GNN model architecture                (app.ml.model.GNNModel — Module 12,
+                                           node-level regression, UNTRAINED;
+                                           training/evaluation/serving are
+                                           later modules)
 
 INPUT FEATURES vs TARGET (leakage policy)
 -----------------------------------------
@@ -38,7 +41,9 @@ is handled completely separately: it is passed explicitly via
 validated independently, and can never end up inside ``x``. The project
 currently contains NO real target values anywhere in the database, so callers
 get an unlabeled dataset (``y is None``) until such a property actually exists;
-synthetic targets are confined to clearly-marked test fixtures.
+synthetic targets are confined to clearly-marked test fixtures. The Module 12
+model never receives ``y`` — ``GNNModel.forward`` takes only ``x`` and
+``edge_index``.
 """
 
 from __future__ import annotations
@@ -46,11 +51,15 @@ from __future__ import annotations
 from app.ml.dataset import GraphDataset, GraphDatasetBuilder
 from app.ml.exceptions import (
     EmptyGraphError,
+    GNNModelConfigError,
+    GNNModelError,
+    GNNModelInputError,
     GraphDatasetError,
     GraphDatasetValidationError,
 )
 from app.ml.extraction import RawEdge, RawGraph, RawNode, extract_graph
 from app.ml.features import FeatureMetadata, NodeFeatureEncoder
+from app.ml.model import GNNConfig, GNNModel
 
 __all__ = [
     "GraphDataset",
@@ -58,6 +67,11 @@ __all__ = [
     "EmptyGraphError",
     "GraphDatasetError",
     "GraphDatasetValidationError",
+    "GNNConfig",
+    "GNNModel",
+    "GNNModelError",
+    "GNNModelConfigError",
+    "GNNModelInputError",
     "RawEdge",
     "RawGraph",
     "RawNode",

@@ -345,3 +345,72 @@ Tests:
 python -m pytest tests/test_gnn_dataset.py -q        # unit (mocked repository) - no Neo4j needed
 python -m pytest tests/test_gnn_dataset_neo4j.py -q  # real Neo4j integration (skipped when down)
 ```
+### Module 12 - GNN Model Architecture (node-level delay regression)
+
+Module 12 adds the GNN architecture that consumes the Module 11 dataset. It
+implements the MODEL ONLY - no training loop, no optimizer, no evaluation and
+no prediction API (Modules 13+). The model is UNTRAINED: it must not be
+presented as predicting real delays yet.
+
+Architecture (node-level regression, one prediction per graph node):
+
+```
+node features x [N, F]                    (Module 11 NodeFeatureEncoder)
+        v
+GCNConv(F -> hidden_dim) + ReLU + Dropout
+        v   (repeated num_layers times; message passing along the
+        v    Module 11 edge direction: upstream -> downstream)
+node embeddings [N, hidden_dim]
+        v
+Linear regression head (hidden_dim -> output_dim)
+        v
+predicted downstream delay per node [N]   (output_dim == 1, default)
+```
+
+Why GCN (Kipf & Welling 2017):
+
+- Simple, well-supported and adequate for a first node-regression model; runs
+  on CPU with the pure-Python `torch_geometric` core (the compiled
+  `torch-scatter`/`torch-sparse` companion wheels are NOT required).
+- Message passing flows source -> target along `edge_index` exactly as stored
+  by Module 11 (`(source)-[rel]->(target)` = "target consumes from source"),
+  so upstream disruption features propagate toward downstream nodes - the
+  supply-chain ripple-effect task. Edges are never reversed; Neo4j
+  relationship semantics are untouched.
+- GCNConv adds self-loops internally, so isolated nodes keep their own
+  features instead of receiving an all-zero aggregate.
+
+Usage:
+
+```python
+from app.ml.model import GNNModel
+
+data = dataset.to_pyg_data()            # Module 11 export (PyG now required)
+model = GNNModel(input_dim=dataset.num_features)  # derive dim from Module 11
+predictions = model(data.x, data.edge_index)      # shape [num_nodes]
+```
+
+Contract:
+
+| Aspect | Behaviour |
+| --- | --- |
+| Output | `[num_nodes]` when `output_dim == 1` (matches Module 11 target layout `y: float32 [num_nodes]`), otherwise `[num_nodes, output_dim]`. Exactly one prediction per node - no graph-level pooling. |
+| Target leakage | Impossible by construction: `forward(x, edge_index)` has no target parameter; `y` stays reserved for the Module 13 loss. |
+| Configuration | `GNNModel(input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.1)` or `GNNModel.from_config(GNNConfig(...))`. All values are validated; violations raise `GNNModelConfigError`. Forward-pass violations (wrong width/dtype/NaN/out-of-bounds indices) raise `GNNModelInputError`. |
+| Persistence | `model.save_state(path)` / `GNNModel.load_state(path)` - a plain `{config, state_dict}` checkpoint (tensors + primitives only, loaded with `weights_only=True`; no arbitrary object deserialization). |
+| Device | Plain `nn.Module`: CPU required and default; `model.to("cuda")` works when a GPU exists. No GPU, no downloads and no internet needed. |
+| Determinism | Construction is seeded by the caller (`torch.manual_seed`); eval-mode forwards are deterministic. Dropout applies in train mode only. |
+
+STATUS - UNTRAINED: weights are randomly initialized at construction. Module 12
+proves the architecture, not accuracy: no accuracy numbers exist yet, and none
+may be claimed until Module 13 trains and evaluates the model.
+
+Install note: `pip install torch_geometric` (pure-Python wheel). It must be
+compatible with the installed torch build; `app.ml` now imports PyG, so
+Module 11's `GraphDataset.to_pyg_data()` export works out of the box.
+
+Tests:
+
+```
+python -m pytest tests/test_gnn_model.py -q   # architecture unit tests (synthetic, no Neo4j)
+```
