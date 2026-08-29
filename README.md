@@ -414,3 +414,158 @@ Tests:
 ```
 python -m pytest tests/test_gnn_model.py -q   # architecture unit tests (synthetic, no Neo4j)
 ```
+
+### Module 13 — GNN Training & Evaluation
+
+Module 13 adds the training/evaluation layer AROUND the existing modules. It
+trains the Module 12 `GNNModel` to predict downstream delays
+(**node-level regression**) from upstream disruption features, using the
+Module 11 `GraphDataset` unchanged. It contains NO HTTP endpoint, NO model
+serving and NO real-time inference — those belong to later modules, which
+will consume `GNNTrainer.model` or a saved checkpoint.
+
+Architecture (reuses Modules 11 & 12 unchanged; no duplicated model/dataset code):
+
+```
+Module 11  GraphDataset (x float32 [N,F], edge_index int64 [2,E], y float32 [N])
+        |   app.ml.dataset (unchanged)  ->  to_pyg_data() tensors
+        v
+Module 12  GNNModel(x, edge_index)  ->  [N] predictions (unchanged)
+        v
+Module 13  GNNTrainer                    (app.ml.training)
+        |   split_nodes() -> NodeSplit   (app.ml.splitting, seeded)
+        |   Adam + regression loss on TRAIN nodes only
+        v
+Validation (eval mode, torch.no_grad, per eval_interval)
+        v
+TrainingHistory + metrics                (app.ml.evaluation)
+        v
+state_dict checkpoints (GNNCheckpoint)   ->  later prediction module
+```
+
+New files: `app/ml/splitting.py` (deterministic node split),
+`app/ml/evaluation.py` (regression metrics), `app/ml/training.py`
+(`GNNTrainingConfig`, `TrainingHistory`, `GNNCheckpoint`, `GNNTrainer`,
+`set_seed`). No new pip dependencies; no Neo4j schema change; no API change.
+
+Usage:
+
+```python
+from app.ml.training import GNNTrainer, GNNTrainingConfig
+from app.ml.model import GNNModel
+
+dataset = GraphDatasetBuilder(repository).build(target_property="downstream_delay_days")
+model = GNNModel(input_dim=dataset.num_features, hidden_dim=64, num_layers=2, dropout=0.1)
+trainer = GNNTrainer(model, dataset, GNNTrainingConfig(epochs=200, seed=42))
+history = trainer.train()            # structured per-epoch history
+loss, metrics = trainer.evaluate_test()
+trainer.save_checkpoint("checkpoints/m13.pt")
+```
+
+
+Training objective — node-level regression only
+------------------------------------------------
+
+For N graph nodes the model produces N predictions and the loss compares them
+against ground-truth per-node delay targets on the TRAIN nodes only. There is
+no classification, no HIGH/MEDIUM/LOW classes, and no graph-level pooling.
+Targets are NEVER model inputs: `GNNModel.forward(x, edge_index)` has no
+target parameter (Module 12 anti-leakage contract) and the trainer only ever
+calls `model(x, edge_index)`.
+
+Target validation is strict (fail loudly, never fabricate): an unlabeled
+dataset (`y is None`), an empty graph, a non-finite target or a model with
+`output_dim != 1` aborts trainer construction with `GNNTrainingError`
+subclasses. The database currently contains NO real delay labels, so default
+builds are unlabeled and the trainer rejects them — synthetic labels exist
+only in clearly-marked test fixtures.
+
+Train/validation/test strategy
+------------------------------
+
+`split_nodes(num_nodes, validation_split=0.2, test_split=0.1, seed=...)`
+partitions NODE indices (transductive setup — the standard Kipf & Welling
+scheme for one graph). Why this is safe here:
+
+* Module 11 yields ONE connected supply-chain graph and Module 12 consumes
+  one `(x, edge_index)` pair for the whole graph.
+* Validation/test targets are used ONLY by their own loss/metrics — never by
+  training and never as features.
+* Module 11 guarantees targets cannot be features
+  (`_assert_no_target_leakage`), so messages passed along edges carry
+  current-state features only; validation/test labels cannot leak into
+  training through message passing.
+* An inductive subgraph split (dropping edges) is intentionally NOT used: it
+  would change the very message-passing structure the model must learn on.
+
+The split is deterministic for a given seed (a locally seeded
+`numpy.random.Generator`; the global `random`/`numpy.random` state is never
+touched), the three counts always sum to `num_nodes` (no silent data loss),
+and a dataset too small for the requested split is rejected explicitly.
+`validation_split` must be > 0 (training always validates); `test_split`
+may be 0.0 to skip the held-out test evaluation.
+
+
+Loss, optimizer, metrics, history
+---------------------------------
+
+| Aspect | Choice | Rationale |
+| --- | --- | --- |
+| Loss | `MSELoss` (default; configurable `loss="mse"`, `"mae"` or `"huber"`) | Standard differentiable regression loss; no custom loss invented because no specification requires one. |
+| Optimizer | `Adam` (`learning_rate=0.01`, `weight_decay=5e-4` defaults) | Standard, well-supported; both values configurable (defaults are the conventional GCN values of Kipf & Welling 2017). |
+| Metrics | `{"mse", "rmse", "mae", "r2"}` per split | `r2` is `None` (not NaN) when undefined — single sample or zero target variance. Empty inputs, shape mismatches and NaN/inf values raise instead of producing silent garbage. |
+| History | `TrainingHistory` (`train_loss`, `val_loss`, `train_metrics`, `val_metrics`, `stopped_early`, `best_epoch`, `best_val_loss`) | Structured and JSON-safe; `val_*[i]` is `None` for epochs where validation was skipped (`eval_interval`). Training stops loudly if the loss becomes non-finite. |
+
+Validation runs after every epoch (or every `eval_interval`-th epoch; the
+final epoch is always validated) in `model.eval()` + `torch.no_grad()` —
+parameters are never updated during validation.
+
+Early stopping, checkpointing, reproducibility
+----------------------------------------------
+
+* **Early stopping** (optional): `patience` (in validation rounds, `None` =
+  disabled) monitors the validation loss and stops when it stops improving;
+  `restore_best=True` (default) reloads the best-validation-loss weights
+  afterwards.
+* **Checkpoints**: `GNNTrainer.save_checkpoint(path)` writes a plain
+  `torch.save` mapping — `model_state_dict`, `optimizer_state_dict`, `epoch`,
+  `best_val_loss`, both configs, last validation metrics and the history —
+  and `GNNTrainer.load_checkpoint(path, model=..., optimizer=...)` restores
+  it with `torch.load(..., weights_only=True)`. No arbitrary object pickling
+  (same policy as Module 12). Trained `.pt` binaries must NOT be committed
+  to Git. `GNNTrainingConfig(checkpoint_path=...)` auto-saves after `train()`.
+* **Reproducibility**: with `GNNTrainingConfig(seed=...)` the trainer seeds
+  torch's global RNG at the start of `train()` (dropout draws from it) and
+  the node split uses its own locally seeded numpy Generator. Same seed +
+  same dataset => identical loss histories on the same machine/build
+  (verified by tests). No application-global RNG state is modified otherwise.
+
+CPU-first: the development environment is CPU-only and CPU training is fully
+supported and tested; `device="cuda"` works when a GPU exists and fails
+loudly on CPU-only machines. No downloads and no internet are needed.
+
+
+Limitations (read before trusting any numbers)
+----------------------------------------------
+
+* **No real training data exists yet.** The Neo4j database contains no
+  downstream-delay/lead-time labels, so no real-data training has been run.
+  All verification uses small SYNTHETIC datasets; none of the numbers they
+  produce may be presented as real-world predictive accuracy.
+* **Model performance depends entirely on the quality and size of the
+  training dataset.** With few labeled nodes (a handful per split) metrics
+  are noisy and the model cannot generalize; meaningful evaluation needs an
+  appropriately large, correctly labeled dataset covering realistic
+  disruption scenarios.
+* The transductive node split assumes the whole graph is available at
+  prediction time; adding new nodes requires re-encoding (Module 11
+  `transform`) and a fresh forward pass.
+* GCN with 2 layers propagates at most 2 hops; longer ripple paths need more
+  layers (or a different architecture) and more data.
+
+Tests (all synthetic, CPU-only; no Neo4j / internet / GPU required):
+
+```
+python -m pytest tests/test_gnn_training.py -q   # Module 13: config, metrics, split, training, checkpoints
+```
+

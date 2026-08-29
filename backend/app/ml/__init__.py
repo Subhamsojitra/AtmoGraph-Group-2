@@ -1,8 +1,9 @@
-"""Machine-learning package for AtmoGraph (Modules 11 & 12).
+"""Machine-learning package for AtmoGraph (Modules 11, 12 & 13).
 
 Module 11 turns the existing Neo4j supply-chain graph into a numerical,
 GNN-ready dataset. Module 12 adds the GNN model architecture that consumes
-it. Scope of this package:
+it. Module 13 adds training and evaluation around both. Scope of this
+package:
 
     Existing Neo4j Graph
         |   GraphRepository.get_nodes / find_all_relationships
@@ -21,9 +22,17 @@ it. Scope of this package:
                                            Geometric export)
         v
     GNN model architecture                (app.ml.model.GNNModel — Module 12,
-                                           node-level regression, UNTRAINED;
-                                           training/evaluation/serving are
-                                           later modules)
+                                           node-level regression)
+        v
+    Training & evaluation                 (app.ml.training.GNNTrainer —
+                                           Module 13: seeded/deterministic
+                                           node splits, Adam, regression
+                                           loss on train nodes, validation,
+                                           metrics, checkpoints; NO serving
+                                           API — later modules integrate
+                                           predictions)
+        |   app.ml.splitting  (deterministic NodeSplit)
+        |   app.ml.evaluation (MSE / RMSE / MAE / R2)
 
 INPUT FEATURES vs TARGET (leakage policy)
 -----------------------------------------
@@ -41,25 +50,40 @@ is handled completely separately: it is passed explicitly via
 validated independently, and can never end up inside ``x``. The project
 currently contains NO real target values anywhere in the database, so callers
 get an unlabeled dataset (``y is None``) until such a property actually exists;
-synthetic targets are confined to clearly-marked test fixtures. The Module 12
-model never receives ``y`` — ``GNNModel.forward`` takes only ``x`` and
-``edge_index``.
+synthetic targets are confined to clearly-marked test fixtures. Neither the
+Module 12 model (``forward(x, edge_index)``) nor the Module 13 trainer ever
+receive ``y`` as an input — targets are used only for the loss and metrics
+over their own train/validation/test node split.
 """
 
 from __future__ import annotations
 
 from app.ml.dataset import GraphDataset, GraphDatasetBuilder
+from app.ml.evaluation import METRIC_NAMES, regression_metrics
 from app.ml.exceptions import (
     EmptyGraphError,
+    GNNCheckpointError,
+    GNNEvaluationError,
     GNNModelConfigError,
     GNNModelError,
     GNNModelInputError,
+    GNNTrainingConfigError,
+    GNNTrainingDataError,
+    GNNTrainingError,
     GraphDatasetError,
     GraphDatasetValidationError,
 )
 from app.ml.extraction import RawEdge, RawGraph, RawNode, extract_graph
 from app.ml.features import FeatureMetadata, NodeFeatureEncoder
 from app.ml.model import GNNConfig, GNNModel
+from app.ml.splitting import NodeSplit, split_nodes
+from app.ml.training import (
+    GNNCheckpoint,
+    GNNTrainingConfig,
+    GNNTrainer,
+    TrainingHistory,
+    set_seed,
+)
 
 __all__ = [
     "GraphDataset",
@@ -72,10 +96,25 @@ __all__ = [
     "GNNModelError",
     "GNNModelConfigError",
     "GNNModelInputError",
+    "GNNTrainingError",
+    "GNNTrainingConfigError",
+    "GNNTrainingDataError",
+    "GNNEvaluationError",
+    "GNNCheckpointError",
+    "GNNCheckpoint",
+    "GNNTrainingConfig",
+    "GNNTrainer",
+    "TrainingHistory",
+    "METRIC_NAMES",
+    "NodeSplit",
     "RawEdge",
     "RawGraph",
     "RawNode",
     "extract_graph",
     "FeatureMetadata",
     "NodeFeatureEncoder",
+    "regression_metrics",
+    "set_seed",
+    "split_nodes",
 ]
+

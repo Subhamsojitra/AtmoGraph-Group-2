@@ -58,3 +58,49 @@ class GNNModelInputError(GNNModelError):
     not an int64 ``[2, num_edges]`` tensor, or edge indices outside
     ``[0, num_nodes)``. The model never guesses; invalid inputs abort.
     """
+
+# --------------------------------------------------------------------------- #
+# GNN training & evaluation (Module 13)
+# --------------------------------------------------------------------------- #
+
+
+class GNNTrainingError(Exception):
+    """Base class for all GNN training/evaluation errors (Module 13)."""
+
+
+class GNNTrainingConfigError(GNNTrainingError):
+    """Raised when a training configuration is invalid.
+
+    Examples: non-positive epochs/learning rate, negative weight decay,
+    split ratios outside ``[0, 1)`` or summing to ``>= 1``, a negative
+    patience, an unknown loss name, or an unparseable device string.
+    Failing loudly prevents silently mis-configured training runs.
+    """
+
+
+class GNNTrainingDataError(GNNTrainingError):
+    """Raised when the dataset cannot support a training run.
+
+    Examples: an unlabeled dataset (``y is None``), an empty graph, a
+    non-finite target vector, or a node count too small for the requested
+    train/validation/test split. Training requires valid labels and never
+    fabricates them (Module 11 no-fabrication policy).
+    """
+
+
+class GNNEvaluationError(GNNTrainingError):
+    """Raised when evaluation metrics or predictions cannot be computed.
+
+    Examples: empty prediction/target tensors, mismatched shapes, out-of-
+    bounds node indices, or non-finite (NaN/infinite) values. Metrics are
+    never silently wrong.
+    """
+
+
+class GNNCheckpointError(GNNTrainingError):
+    """Raised when a training checkpoint is malformed.
+
+    Examples: a file that is not a Module 13 checkpoint (missing keys) or a
+    payload whose stored configuration can no longer be reconstructed.
+    """
+
