@@ -828,6 +828,14 @@ export default function DashboardPage() {
     graphRef.current?.resetZoom();
   };
 
+  // Resolve predictions dynamically for the selected node so details panel is automatically in sync
+  const selectedNodeWithLatestPrediction = selectedNode
+    ? {
+        ...selectedNode,
+        prediction: predictions.find(p => p && p.nodeId === selectedNode.id) || null
+      }
+    : null;
+
   return (
     <div className="app-shell" style={{ backgroundColor: TOKENS.bg, fontFamily: "'Inter', sans-serif", opacity: fontsReady ? 1 : 0 }}>
       <Header onMenuClick={() => setMobileNavOpen(true)} />
@@ -951,10 +959,10 @@ export default function DashboardPage() {
           </div>
         </main>
 
-        <NodeDetailsPanel node={selectedNode} />
+        <NodeDetailsPanel node={selectedNodeWithLatestPrediction} />
       </div>
 
-      <NodeDetailsSheet node={selectedNode} onClose={() => setSelectedNode(null)} />
+      <NodeDetailsSheet node={selectedNodeWithLatestPrediction} onClose={() => setSelectedNode(null)} />
     </div>
   );
 }

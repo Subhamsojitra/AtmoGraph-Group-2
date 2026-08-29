@@ -6,6 +6,21 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-29 — Day 20: GNN Prediction Integration Readiness
+* **Work completed**:
+  - Reviewed and strengthened prediction service boundary (`predictionService.js`) by implementing defensive input sanitization (`sanitizePredictions`).
+  - Added robust validation checking: filters out null/undefined entries, filters out entries missing a valid `nodeId`, and resolves duplicate `nodeId` entries by keeping the first occurrence.
+  - Added type-safe normalization: only normalizes and clamps `predictedRisk` and `confidence` when values are strictly numeric (`typeof` checks), preserving non-numeric values as-is.
+  - Refined risk state fallback in `getRiskState` and `getNodeRiskState` to gracefully return `'unknown'` on unexpected object formats or unrecognized levels without crashing the dashboard.
+  - Optimized the D3 canvas lifecycle (`GraphCanvas.jsx`) by decoupling prediction updates from simulation initialization: removed `predictions` from the main `useEffect` dependency array and introduced a dedicated predictions `useEffect` utilizing a synced ref (`predictionsRef`).
+  - Decoupled prediction visual class synchronization to update dynamically in $O(N)$ time via in-place property mapping, completely preventing simulation reheating (physical drift) and UI/CPU stutter (synchronous pre-ticking rerun) upon prediction reload.
+  - Aligned selected node state in `DashboardPage.jsx` by dynamically resolving predictions for `selectedNode` before passing it to `NodeDetailsPanel` and `NodeDetailsSheet`. This ensures details panels instantly sync with updated predictions.
+  - Verified backend-mode gracefulness: confirmed empty predictions array returns successfully without making requests to non-existent prediction endpoints or crashing the UI.
+  - Checked large-graph performance: verified that large graph mode (`?mode=large` with ~2,000 nodes/3,000 links) loads efficiently and remains fully responsive to drag, pan, zoom, and fit actions.
+  - Ran automated validation checks: verified Vite production build succeeds and oxlint linter passes with 0 errors and 0 warnings.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-28 — Day 19: Integration Verification & Stability Review
 * **Work completed**:
   - Performed lightweight stability and regression verification of the AtmoGraph frontend across all three development modes (`?mode=mock`, `?mode=backend`, and `?mode=large`).

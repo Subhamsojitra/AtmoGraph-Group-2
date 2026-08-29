@@ -34,6 +34,11 @@ const GraphCanvas = forwardRef(({
     onZoomLevelChangeRef.current = onZoomLevelChange;
   }, [onZoomLevelChange]);
 
+  const predictionsRef = useRef(predictions);
+  useEffect(() => {
+    predictionsRef.current = predictions;
+  }, [predictions]);
+
   // Expose imperative methods to parent for programmatic controls
   useImperativeHandle(ref, () => ({
     zoomIn() {
@@ -184,8 +189,15 @@ const GraphCanvas = forwardRef(({
     const previousNodes = simulation.nodes() || [];
     const previousNodesMap = new Map(previousNodes.map(n => [n.id, n]));
 
-    // Map predictions by nodeId for quick lookup
-    const predictionsMap = new Map((predictions || []).map(p => [p.nodeId, p]));
+    // Map predictions by nodeId for quick lookup, defending against malformed list/entries
+    const predictionsMap = new Map();
+    if (Array.isArray(predictionsRef.current)) {
+      predictionsRef.current.forEach(p => {
+        if (p && p.nodeId !== undefined && p.nodeId !== null) {
+          predictionsMap.set(p.nodeId, p);
+        }
+      });
+    }
 
     const nodes = safeNodes
       .filter(n => n && n.id !== undefined && n.id !== null)
@@ -429,7 +441,48 @@ const GraphCanvas = forwardRef(({
       simulation.alpha(0.3).restart();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, onNodeClick, predictions]);
+  }, [data, onNodeClick]);
+
+  // Sync predictions and risk state when predictions changes
+  useEffect(() => {
+    if (!simulationRef.current || !data) return;
+
+    const simulation = simulationRef.current;
+    const currentNodes = simulation.nodes() || [];
+
+    // Map predictions by nodeId for quick lookup, defending against malformed entries
+    const predictionsMap = new Map();
+    if (Array.isArray(predictions)) {
+      predictions.forEach(p => {
+        if (p && p.nodeId !== undefined && p.nodeId !== null) {
+          predictionsMap.set(p.nodeId, p);
+        }
+      });
+    }
+
+    // Update prediction object on existing nodes in the simulation in-place
+    currentNodes.forEach(node => {
+      if (node && node.id !== undefined) {
+        node.prediction = predictionsMap.get(node.id) || null;
+      }
+    });
+
+    // Helper to determine risk class
+    const getRiskClass = (d) => {
+      const riskState = getRiskState(d.prediction);
+      return NODE_RISK_CLASS[riskState] || NODE_RISK_CLASS.none;
+    };
+
+    // Update classes on the SVG nodes dynamically
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("g.node-group")
+      .attr("class", d => {
+        const isSelected = selectedNodeIdRef.current === d.id;
+        const riskClass = getRiskClass(d);
+        return `node-group graph-node ${isSelected ? 'graph-node--selected' : ''} ${riskClass}`;
+      });
+
+  }, [predictions, data]);
 
   // Sync selection styling when selectedNodeId changes
   useEffect(() => {

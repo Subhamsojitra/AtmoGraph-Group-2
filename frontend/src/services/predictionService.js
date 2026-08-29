@@ -25,6 +25,94 @@
  * @param {string} mode - The active dataset mode ('mock', 'backend', 'large')
  * @returns {Promise<{ predictions: Array }>}
  */
+/**
+ * Sanitizes and normalizes a list of prediction entries.
+ * Filters out null/undefined entries, entries without nodeId, and resolves duplicate nodeIds.
+ * Only normalizes numeric predictedRisk/confidence values when they are actually numeric.
+ * Preserves non-numeric values as-is.
+ * 
+ * @param {Array} predictions - Raw predictions array
+ * @returns {Array} Sanitized predictions array
+ */
+export function sanitizePredictions(predictions) {
+  if (!Array.isArray(predictions)) return [];
+
+  const seenNodeIds = new Set();
+  const sanitized = [];
+
+  for (const p of predictions) {
+    // 1. Skip null/undefined or non-object entries
+    if (!p || typeof p !== 'object') {
+      console.warn("Prediction service: ignored null or non-object prediction entry:", p);
+      continue;
+    }
+
+    // 2. Skip entries missing nodeId or with invalid/empty nodeId
+    const nodeId = p.nodeId;
+    if (nodeId === undefined || nodeId === null || nodeId === '') {
+      console.warn("Prediction service: ignored prediction entry missing nodeId:", p);
+      continue;
+    }
+
+    // 3. Skip duplicate nodeIds (keep first seen)
+    const nodeIdStr = String(nodeId);
+    if (seenNodeIds.has(nodeIdStr)) {
+      console.warn(`Prediction service: ignored duplicate prediction for nodeId "${nodeIdStr}":`, p);
+      continue;
+    }
+
+    // 4. Copy entry properties safely
+    const sanitizedEntry = { ...p, nodeId: nodeIdStr };
+
+    // 5. Only normalize predictedRisk when it is actually a number
+    if (p.predictedRisk !== undefined && p.predictedRisk !== null) {
+      if (typeof p.predictedRisk === 'number' && !isNaN(p.predictedRisk)) {
+        sanitizedEntry.predictedRisk = Math.max(0, Math.min(100, p.predictedRisk));
+      } else {
+        // Keep non-numeric values exactly as-is per user request
+        sanitizedEntry.predictedRisk = p.predictedRisk;
+      }
+    }
+
+    // 6. Only normalize confidence when it is actually a number
+    if (p.confidence !== undefined && p.confidence !== null) {
+      if (typeof p.confidence === 'number' && !isNaN(p.confidence)) {
+        if (p.confidence > 1) {
+          sanitizedEntry.confidence = Math.max(0, Math.min(100, p.confidence)) / 100;
+        } else {
+          sanitizedEntry.confidence = Math.max(0, Math.min(1, p.confidence));
+        }
+      } else {
+        // Keep non-numeric values exactly as-is per user request
+        sanitizedEntry.confidence = p.confidence;
+      }
+    }
+
+    // 7. Safe fallback for level
+    if (p.predictedLevel !== undefined && p.predictedLevel !== null) {
+      if (typeof p.predictedLevel === 'string') {
+        sanitizedEntry.predictedLevel = p.predictedLevel.toLowerCase();
+      } else {
+        sanitizedEntry.predictedLevel = p.predictedLevel;
+      }
+    }
+
+    seenNodeIds.add(nodeIdStr);
+    sanitized.push(sanitizedEntry);
+  }
+
+  return sanitized;
+}
+
+/**
+ * Fetches prediction data for the current graph.
+ * 
+ * If no real prediction endpoint exists, backend mode returns { predictions: [] }.
+ * The absence of prediction data must never block graph rendering.
+ * 
+ * @param {string} mode - The active dataset mode ('mock', 'backend', 'large')
+ * @returns {Promise<{ predictions: Array }>}
+ */
 export async function getPredictionData(mode = 'mock') {
   if (mode === 'backend') {
     // Return empty prediction data in backend mode to support graceful failure
@@ -47,7 +135,7 @@ export async function getPredictionData(mode = 'mock') {
             timestamp: new Date().toISOString()
           });
         }
-        resolve({ predictions });
+        resolve({ predictions: sanitizePredictions(predictions) });
       }, 300);
     });
   }
@@ -55,7 +143,7 @@ export async function getPredictionData(mode = 'mock') {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
-        predictions: [
+        predictions: sanitizePredictions([
           {
             nodeId: "node-1",
             predictedRisk: 85,
@@ -70,7 +158,7 @@ export async function getPredictionData(mode = 'mock') {
             confidence: 0.78,
             timestamp: new Date().toISOString()
           }
-        ]
+        ])
       });
     }, 600);
   });
@@ -88,18 +176,21 @@ export async function getPredictionData(mode = 'mock') {
  * @returns {string} One of: 'high', 'medium', 'low', 'unknown'
  */
 export function getRiskState(prediction) {
-  if (!prediction) return 'unknown';
+  if (!prediction || typeof prediction !== 'object') return 'unknown';
   
   // Normalize based on temporary mock predictedLevel fields.
   // This centralizes prediction interpretation.
   const level = prediction.predictedLevel;
-  if (level === 'high') {
+  if (!level || typeof level !== 'string') return 'unknown';
+
+  const normalized = level.toLowerCase();
+  if (normalized === 'high') {
     return 'high';
   }
-  if (level === 'elevated' || level === 'medium') {
+  if (normalized === 'elevated' || normalized === 'medium') {
     return 'medium';
   }
-  if (level === 'stable' || level === 'low') {
+  if (normalized === 'stable' || normalized === 'low') {
     return 'low';
   }
   return 'unknown';
