@@ -569,3 +569,114 @@ Tests (all synthetic, CPU-only; no Neo4j / internet / GPU required):
 python -m pytest tests/test_gnn_training.py -q   # Module 13: config, metrics, split, training, checkpoints
 ```
 
+### Module 14 — GNN Prediction / Inference
+
+Module 14 adds the prediction/serving layer AROUND the existing modules. It
+safely loads a trained Module 13 checkpoint, rebuilds the supply-chain graph
+dataset with the Module 11 builder, runs the Module 12 GNN in eval mode with
+`torch.no_grad()`, and serves one **raw predicted downstream-delay value per
+node** through a FastAPI endpoint. Modules 11-13 are reused unchanged: no
+model, dataset or training code is duplicated, the model is never retrained
+at serving time, and the regression target `y` is never an inference input.
+
+FastAPI endpoint:
+
+```
+POST /api/v1/predictions
+```
+
+Optional request body (empty body = defaults; `relationship_types` mirrors
+the Module 11 dataset builder — omitted means all outgoing relationships):
+
+```json
+{
+  "relationship_types": ["SUPPLIES"]
+}
+```
+
+Example response:
+
+```json
+{
+  "predictions": [
+    { "node_id": "entity-001", "prediction": 1.5 },
+    { "node_id": "entity-002", "prediction": 0.0 }
+  ],
+  "prediction_count": 2,
+  "timestamp": "2026-01-01T00:00:00Z"
+}
+```
+
+Architecture:
+
+```
+Trained Module 13 checkpoint (state_dict, torch.load(weights_only=True))
+        |   GNNTrainer.load_checkpoint (existing, reused)
+        v
+GNNPredictor (app.ml.prediction)   eval mode + torch.no_grad, device-validated
+        v
+GraphDatasetBuilder (Module 11, existing)  ->  GraphDataset (x, edge_index)
+        |   (y is NEVER read; unlabeled graphs predict fine)
+        v
+GNNPredictionResult  (node_id -> scalar prediction, positional mapping)
+        v
+PredictionService (app.services.prediction_service, model loaded once & reused)
+        v
+POST /api/v1/predictions  ->  PredictionResponse (Pydantic)
+```
+
+Behaviour / contract:
+
+| Aspect | Behaviour |
+| --- | --- |
+| Output | Exactly one prediction per graph node: `predictions[i] = {node_id, prediction}`, plus `prediction_count` and `timestamp`. `node_id` is the Neo4j entity identifier (the frontend maps it to its graph node id). |
+| Raw values only | `prediction` is the raw model output (node-level regression, e.g. predicted downstream delay). **No severity classification (HIGH/MEDIUM/LOW) is derived** because the specification defines no thresholds; raw value and any future classification stay strictly separate. |
+| Checkpoint behaviour | Served from `PREDICTION_CHECKPOINT_PATH` (default: unset -> endpoint returns 503). Checkpoints are produced offline by Module 13 (`GNNTrainer.save_checkpoint`), loaded with `torch.load(..., weights_only=True)` (no arbitrary object deserialization), and are never committed to Git or downloaded. Missing file -> 503; corrupt payload, weight/config mismatch or `output_dim != 1` -> loud domain errors (500), never silent garbage. |
+| Model lifecycle | Loaded lazily ONCE and reused across requests (same singleton pattern as the Neo4j database); `reload_model()` exists for post-deployment refresh. No per-request reload. |
+| Target leakage | Impossible by construction: inference reads only `x`/`edge_index`; `y` is never an input and unlabeled graphs predict fine. |
+| Input validation | Empty graphs, non-dataset objects, feature-width mismatches, NaN/infinite features and non-finite outputs all raise dedicated `app.ml.exceptions` errors instead of being repaired. |
+| Device | `PREDICTION_DEVICE` (default `cpu`); `cuda` only honoured when a GPU exists, otherwise fails loudly. CPU is fully supported and tested. |
+| Neo4j dependency | The dataset is built per request from the live graph via the existing parameterized `GraphRepository` (read-only, no schema change, no new driver). Neo4j down -> 503; empty graph -> 503. |
+
+Error mapping (responses never contain filesystem paths, stack traces or
+credentials):
+
+| Outcome | HTTP |
+| --- | --- |
+| Success | `200` |
+| Invalid request body | `422` |
+| No checkpoint configured / checkpoint file missing | `503` |
+| Neo4j unavailable / empty graph | `503` |
+| Invalid or incompatible checkpoint/model, unusable graph data | `500` |
+| Unexpected error | `500` |
+
+Configuration (see `.env.example`; both are documented assumptions, not
+official specification values):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint; unset = prediction endpoint disabled (503) |
+| `PREDICTION_DEVICE` | `cpu` | Torch device used for inference |
+
+Tests (synthetic + mocked, CPU-only; no Neo4j / internet / GPU required):
+
+```
+python -m pytest tests/test_gnn_prediction.py -q     # Module 14: inference layer (checkpoint load, validation, determinism)
+python -m pytest tests/test_prediction_service.py -q # Module 14: service orchestration (lazy model, error translation)
+python -m pytest tests/test_prediction_api.py -q     # Module 14: API contract (mocked service, status-code mapping)
+```
+
+Limitations (read before trusting any numbers):
+
+* **No real labeled data exists.** Predictions come from whatever checkpoint
+  is deployed via `PREDICTION_CHECKPOINT_PATH`. The project database contains
+  no real downstream-delay labels, so **no real-world predictive accuracy is
+  claimed anywhere**; all verification uses clearly-marked synthetic data.
+* Without a deployed checkpoint the endpoint answers `503` by design — the
+  prediction capability is deployment state and is never faked.
+* The transductive model assumes the whole graph is available at prediction
+  time (see Module 13 limitations); GCN propagates at most `num_layers` hops.
+* The prediction contract is intentionally minimal (`node_id` + raw scalar).
+  Frontend-facing fields such as `predictedRisk`/`predictedLevel` in the
+  frontend mock service are explicitly NOT part of this backend contract.
+

@@ -104,3 +104,65 @@ class GNNCheckpointError(GNNTrainingError):
     payload whose stored configuration can no longer be reconstructed.
     """
 
+
+# --------------------------------------------------------------------------- #
+# GNN prediction / inference (Module 14)
+# --------------------------------------------------------------------------- #
+
+
+class GNNPredictionError(Exception):
+    """Base class for all GNN prediction/inference errors (Module 14).
+
+    The prediction layer consumes the artifacts of Modules 11-13 (dataset,
+    model, checkpoint) and serves inference results. Unlike the offline
+    modules, prediction errors are translated into HTTP responses by the API
+    layer, so every concrete subclass maps to a distinct failure category
+    (missing model, invalid checkpoint, incompatible model, invalid input,
+    runtime failure) and never leaks filesystem paths or stack traces.
+    """
+
+
+class GNNModelNotAvailableError(GNNPredictionError):
+    """Raised when no trained model is available for inference.
+
+    Examples: no checkpoint is configured, or the configured checkpoint file
+    does not exist. The prediction capability is deployment state: the model
+    is trained offline by Module 13 and never downloaded or fabricated here.
+    """
+
+
+class GNNCheckpointInvalidError(GNNPredictionError):
+    """Raised when a checkpoint exists but cannot be loaded safely.
+
+    Examples: a file that is not a torch checkpoint at all, a payload that is
+    not a Module 13 checkpoint, or stored weights that do not match the
+    stored architecture configuration. Corrupt artifacts fail loudly instead
+    of producing silent garbage predictions.
+    """
+
+
+class GNNModelIncompatibleError(GNNPredictionError):
+    """Raised when the loaded model cannot accept the requested inputs.
+
+    Examples: the checkpoint was trained with a different node-feature width
+    than the current graph provides, or its architecture cannot produce the
+    scalar per-node prediction the serving contract requires.
+    """
+
+
+class GNNPredictionInputError(GNNPredictionError):
+    """Raised when the inference input (graph/dataset) is invalid.
+
+    Examples: an empty graph, a non-GraphDataset object, NaN/infinite node
+    features, or an invalid device specifier. Invalid ML input is never
+    silently repaired or guessed around.
+    """
+
+
+class GNNPredictionRuntimeError(GNNPredictionError):
+    """Raised when the forward pass fails or produces unusable output.
+
+    Examples: an unexpected model failure during inference, or an output
+    tensor whose shape/finiteness violates the per-node scalar contract.
+    """
+

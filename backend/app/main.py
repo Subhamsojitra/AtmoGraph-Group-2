@@ -18,6 +18,7 @@ from app.api.entity_resolution import router as entity_resolution_router
 from app.api.graph import router as graph_router
 from app.api.health import router as health_router
 from app.api.news import router as news_router
+from app.api.prediction import router as prediction_router
 from app.api.risk_propagation import router as risk_propagation_router
 from app.database.neo4j import neo4j_db
 
@@ -64,4 +65,5 @@ app.include_router(entity_resolution_router, prefix=API_PREFIX)
 app.include_router(health_router, prefix=API_PREFIX)
 app.include_router(graph_router, prefix=API_PREFIX)
 app.include_router(news_router, prefix=API_PREFIX)
+app.include_router(prediction_router, prefix=API_PREFIX)
 app.include_router(risk_propagation_router, prefix=API_PREFIX)

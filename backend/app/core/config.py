@@ -25,6 +25,7 @@ Notes
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -123,6 +124,18 @@ class Settings(BaseSettings):
     risk_propagation_max_depth: int = 5
     risk_propagation_attenuation: float = 0.5
     risk_propagation_max_affected: int = 500
+
+    # ------------------------------------------------------------------ #
+    # GNN prediction / inference (Module 14)
+    # ------------------------------------------------------------------ #
+    # The prediction endpoint serves node-level downstream-delay values from
+    # the trained Module 12/13 GNN. It stays DISABLED (HTTP 503) until a
+    # trained checkpoint produced offline by Module 13 is configured below;
+    # checkpoints are never committed to Git and never downloaded
+    # automatically. These values are configurable assumptions (no official
+    # specification pins them) and can be tuned via environment variables.
+    prediction_checkpoint_path: Optional[str] = None
+    prediction_device: str = "cpu"
 
 
 #: Module-level singleton. Import this everywhere instead of instantiating

@@ -1,8 +1,9 @@
-"""Machine-learning package for AtmoGraph (Modules 11, 12 & 13).
+"""Machine-learning package for AtmoGraph (Modules 11, 12, 13 & 14).
 
 Module 11 turns the existing Neo4j supply-chain graph into a numerical,
 GNN-ready dataset. Module 12 adds the GNN model architecture that consumes
-it. Module 13 adds training and evaluation around both. Scope of this
+it. Module 13 adds training and evaluation around both. Module 14 adds the
+prediction/inference layer that serves the trained model. Scope of this
 package:
 
     Existing Neo4j Graph
@@ -63,10 +64,16 @@ from app.ml.evaluation import METRIC_NAMES, regression_metrics
 from app.ml.exceptions import (
     EmptyGraphError,
     GNNCheckpointError,
+    GNNCheckpointInvalidError,
     GNNEvaluationError,
     GNNModelConfigError,
     GNNModelError,
+    GNNModelIncompatibleError,
     GNNModelInputError,
+    GNNModelNotAvailableError,
+    GNNPredictionError,
+    GNNPredictionInputError,
+    GNNPredictionRuntimeError,
     GNNTrainingConfigError,
     GNNTrainingDataError,
     GNNTrainingError,
@@ -76,6 +83,7 @@ from app.ml.exceptions import (
 from app.ml.extraction import RawEdge, RawGraph, RawNode, extract_graph
 from app.ml.features import FeatureMetadata, NodeFeatureEncoder
 from app.ml.model import GNNConfig, GNNModel
+from app.ml.prediction import GNNPredictionResult, GNNPredictor
 from app.ml.splitting import NodeSplit, split_nodes
 from app.ml.training import (
     GNNCheckpoint,
@@ -105,6 +113,14 @@ __all__ = [
     "GNNTrainingConfig",
     "GNNTrainer",
     "TrainingHistory",
+    "GNNPredictionError",
+    "GNNModelNotAvailableError",
+    "GNNCheckpointInvalidError",
+    "GNNModelIncompatibleError",
+    "GNNPredictionInputError",
+    "GNNPredictionRuntimeError",
+    "GNNPredictor",
+    "GNNPredictionResult",
     "METRIC_NAMES",
     "NodeSplit",
     "RawEdge",
