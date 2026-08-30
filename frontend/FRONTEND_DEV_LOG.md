@@ -6,6 +6,21 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-30 — Day 21: Week 3 Stability & Integration Review
+* **Work completed**:
+  - Performed a comprehensive stability, integration, and regression review of the Week 3 predictive-overlay foundation and Day 20 optimizations.
+  - Confirmed the prediction flow follows the decoupled architecture: `predictionService.js` (adapter/sanitizer boundary) -> `DashboardPage.jsx` (state controller) -> `GraphCanvas.jsx` -> D3 visual presentation.
+  - Confirmed that prediction data remains fully optional and the graph canvas behaves correctly when no prediction data is available (gracefully mapping to `'unknown'` risk state/no-pulse style).
+  - Verified that Day 20 lifecycle optimizations remain fully intact: prediction updates are completely separated from the main D3 simulation lifecycle via a dedicated ref-synced `useEffect`, ensuring node updates do not restart the simulation, reheat forces, alter coordinates, or interrupt zoom/pan/drag gestures.
+  - Verified risk overlay visuals map correctly: High/At Risk (red pulsing shadow), Elevated/Medium (yellow/orange pulsing shadow), and Stable/Low/Unknown (standard node styling).
+  - Confirmed prediction details panel renders dynamically and generically, safely handling missing fields, nested objects/arrays, and formatting confidence ratios and timestamps cleanly.
+  - Reviewed backend prediction integration status: confirmed no real prediction API endpoint or finalized GNN schema is exposed by the backend/ML services yet (stub/placeholder only), and verified that the frontend gracefully handles this absence.
+  - Performed lightweight regression review across all three dataset modes (`?mode=mock`, `?mode=backend`, and `?mode=large`) to confirm node dragging, hover/selection states, pan/zoom controls, and large-graph performance optimizations remain stable.
+  - Confirmed zero modifications were made to Yashaswini's dashboard layout or components, and Santanu's backend code was left untouched.
+  - Validated build pipeline correctness: ran automated lint check (`npm run lint` via oxlint) and production build (`npm run build`), resolving successfully with 0 errors and 0 warnings.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-29 — Day 20: GNN Prediction Integration Readiness
 * **Work completed**:
   - Reviewed and strengthened prediction service boundary (`predictionService.js`) by implementing defensive input sanitization (`sanitizePredictions`).
