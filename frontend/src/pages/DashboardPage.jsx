@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
-import { getPredictionData, getNodeRiskState } from "../services/predictionService";
+import { getPredictionData, getNodeRiskState, filterPredictionsByHorizon } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -754,6 +754,34 @@ export default function DashboardPage() {
   const [_predictionsLoading, setPredictionsLoading] = useState(false);
   const [_predictionsError, setPredictionsError] = useState(null);
 
+  // Prediction horizon state ('current', '30', '60', '90')
+  // This state serves as the architectural data boundary. Yashaswini can bind the future visual
+  // timeline slider/control directly to this state.
+  const [selectedHorizon, setSelectedHorizon] = useState("30");
+
+  // Dynamically filter prediction data for the selected horizon.
+  // This ensures GraphCanvas and details panels only render prediction states matching selectedHorizon.
+  const filteredPredictions = filterPredictionsByHorizon(predictions, selectedHorizon);
+
+  // TEMPORARY DEVELOPER VERIFICATION HOOK
+  // NOTE: This window hook is temporary and serves only as a testing bridge for manual browser verification.
+  // It is NOT part of the primary design and can be safely deleted without impacting the state/filtering architecture.
+  useEffect(() => {
+    window.setAtmoGraphHorizon = (horizon) => {
+      const validHorizons = ["current", "30", "60", "90"];
+      const horizonStr = String(horizon);
+      if (validHorizons.includes(horizonStr)) {
+        setSelectedHorizon(horizonStr);
+        console.log(`[Developer Bridge] Prediction horizon updated to: "${horizonStr}"`);
+      } else {
+        console.warn(`[Developer Bridge] Invalid horizon "${horizon}". Allowed values: ${validHorizons.join(", ")}`);
+      }
+    };
+    return () => {
+      delete window.setAtmoGraphHorizon;
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
 
@@ -832,7 +860,7 @@ export default function DashboardPage() {
   const selectedNodeWithLatestPrediction = selectedNode
     ? {
         ...selectedNode,
-        prediction: predictions.find(p => p && p.nodeId === selectedNode.id) || null
+        prediction: filteredPredictions.find(p => p && p.nodeId === selectedNode.id) || null
       }
     : null;
 
@@ -951,7 +979,7 @@ export default function DashboardPage() {
                 data={data} 
                 selectedNodeId={selectedNode?.id} 
                 onNodeClick={setSelectedNode} 
-                predictions={predictions}
+                predictions={filteredPredictions}
                 onZoomLevelChange={setZoom}
                 panActive={panActive}
               />

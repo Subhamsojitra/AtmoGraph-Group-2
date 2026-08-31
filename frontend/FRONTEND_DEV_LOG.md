@@ -6,6 +6,18 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-08-31 — Day 22: Week 4 Prediction Timeline Foundation
+* **Work completed**:
+  - Established the frontend data/state foundation required for the company's planned 30/60/90-day prediction timeline.
+  - Implemented `filterPredictionsByHorizon(predictions, horizon)` inside `predictionService.js` to select predictions dynamically without assuming future GNN schemas.
+  - Extended mock prediction data generator (`getPredictionData`) to tag predictions with `horizon: "30"`, `"60"`, or `"90"` for testing.
+  - Established `selectedHorizon` state in `DashboardPage.jsx` and connected `filteredPredictions` to the D3 `GraphCanvas` and details panels, fully preserving existing functionality.
+  - Placed a temporary browser debugging/testing hook `window.setAtmoGraphHorizon(horizon)` explicitly marked as temporary, which can be deleted when Yashaswini binds the visual controls.
+  - Confirmed that backend prediction API or websocket endpoints do not exist yet (stub files only), leaving Santanu's backend and Shivangi's ML codes completely untouched.
+  - Verified linter rules pass with 0 errors/warnings and the production build compiles successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-30 — Day 21: Week 3 Stability & Integration Review
 * **Work completed**:
   - Performed a comprehensive stability, integration, and regression review of the Week 3 predictive-overlay foundation and Day 20 optimizations.
