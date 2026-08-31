@@ -680,3 +680,105 @@ Limitations (read before trusting any numbers):
   Frontend-facing fields such as `predictedRisk`/`predictedLevel` in the
   frontend mock service are explicitly NOT part of this backend contract.
 
+### Module 15 — WebSocket Foundation
+
+Module 15 establishes a production-quality FastAPI WebSocket transport that
+later modules will use for real-time ML / ripple-effect prediction streaming.
+It implements connection lifecycle, JSON message transport, strict message
+validation and structured errors **only** — no ML inference, no GNN model and
+no database access are involved in connecting or pinging.
+
+WebSocket endpoint:
+
+```
+ws://localhost:8000/api/v1/ws
+```
+
+(HTTP API runs under `/api/v1`, so the WebSocket route lives at
+`/api/v1/ws`. FastAPI does not advertise WebSocket routes in the OpenAPI
+`/docs` schema — verify the route with the test suite or
+`app.routes` instead.)
+
+How to start the backend:
+
+```bash
+cd backend
+uvicorn app.main:app --reload
+```
+
+How to connect (Python `websockets` library):
+
+```python
+import asyncio, json
+import websockets
+
+async def main():
+    async with websockets.connect("ws://localhost:8000/api/v1/ws") as ws:
+        print(await ws.recv())                      # {"type": "connected", ...}
+        await ws.send(json.dumps({"type": "ping"}))
+        print(await ws.recv())                      # {"type": "pong", ...}
+
+asyncio.run(main())
+```
+
+Message contract (Module 15):
+
+| Direction | Type | Payload | Notes |
+| --- | --- | --- | --- |
+| Client → Server | `ping` | optional `data` object | heartbeat / liveness check |
+| Server → Client | `connected` | `client_id`, `protocol`, `supported_client_messages` | sent once, immediately after accept |
+| Server → Client | `pong` | `data.echo` = the ping's `data` (if any) | reply to a validated `ping` |
+| Server → Client | `error` | `error.code` + `error.message` | structured failure; connection stays usable |
+
+Error codes (stable, machine-readable):
+
+| Code | Meaning |
+| --- | --- |
+| `INVALID_JSON` | The text frame is not valid JSON |
+| `INVALID_MESSAGE` | Not a JSON object, missing/invalid `type`, or unknown fields |
+| `UNSUPPORTED_MESSAGE_TYPE` | Unknown message type |
+| `NOT_SUPPORTED_YET` | Recognized message reserved for Modules 16/17 (`prediction_request`, `ripple_prediction`) |
+| `INTERNAL_ERROR` | Unexpected server-side failure |
+
+Example session:
+
+```
+CLIENT CONNECT
+  ⇣
+SERVER: {"type":"connected","data":{"client_id":"…","protocol":1,
+         "supported_client_messages":["ping"]},"timestamp":"…"}
+CLIENT: {"type":"ping"}
+  ⇣
+SERVER: {"type":"pong","timestamp":"…"}
+CLIENT: {"type":"nonsense"}
+  ⇣
+SERVER: {"type":"error","error":{"code":"UNSUPPORTED_MESSAGE_TYPE",
+         "message":"Unsupported message type 'nonsense'. Supported types: ping."},
+         "timestamp":"…"}          # connection remains open
+CLIENT DISCONNECT                   # server stays healthy
+```
+
+Behaviour / contract:
+
+* The transport validates every inbound message with a strict Pydantic schema
+  (unknown top-level fields are rejected, never silently ignored).
+* Errors never contain stack traces, filesystem paths or credentials.
+* One faulty client (bad JSON, unknown type, abrupt disconnect) never crashes
+  the server or affects other connections.
+* `ConnectionManager` (`app/services/websocket_manager.py`) keeps an
+  in-process registry of live clients and offers targeted `send_json` and
+  `broadcast_json`; Modules 16/17 reuse it to push prediction streams.
+* Founding connection or pinging requires **no Neo4j and no GNN model**.
+
+Tests:
+
+```bash
+cd backend
+python -m pytest tests/test_websocket.py -q   # no Neo4j / GNN needed
+```
+
+Module 15 is the **communication foundation only**. Real-time GNN /
+ripple-effect prediction streaming is NOT implemented yet — that belongs to
+Modules 16/17, which will publish new message types (`prediction_request`,
+`ripple_prediction`) over this same transport.
+
