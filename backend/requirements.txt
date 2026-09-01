@@ -25,6 +25,24 @@ neo4j
 torch
 transformers
 
+# Graph data preparation (Module 11 - GNN dataset)
+#
+# numpy backs the float32 node-feature matrix and int64 edge index of the
+# GNN dataset (it is already pulled in transitively by torch; it is listed
+# explicitly here because app.ml imports it directly).
+numpy
+
+# GNN model architecture (Module 12 - node-level delay regression)
+#
+# torch_geometric (PyG) provides the GCNConv message-passing layers of
+# app.ml.model.GNNModel. The PyG CORE package is pure Python: GCNConv runs on
+# the native torch scatter ops, so the compiled companion wheels
+# (torch-scatter/torch-sparse) are NOT required for this project's model.
+# It must be compatible with the installed torch build (2.x CPU) and Python;
+# if pip cannot resolve it, install the wheel matching your torch version
+# (see https://pytorch-geometric.readthedocs.io > Installation).
+torch_geometric
+
 # Test dependencies
 httpx
 pytest
