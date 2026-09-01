@@ -755,8 +755,7 @@ export default function DashboardPage() {
   const [_predictionsError, setPredictionsError] = useState(null);
 
   // Prediction horizon state ('current', '30', '60', '90')
-  // This state serves as the architectural data boundary. Yashaswini can bind the future visual
-  // timeline slider/control directly to this state.
+  // Timeline UI can update selectedHorizon through this state boundary.
   const [selectedHorizon, setSelectedHorizon] = useState("30");
 
   // Dynamically filter prediction data for the selected horizon.

@@ -227,12 +227,18 @@ export function filterPredictionsByHorizon(predictions, horizon) {
   // predictions = [] boundary scenario gracefully.
   if (horizon === 'current') return [];
 
+  const targetHorizon = horizon !== undefined && horizon !== null ? String(horizon) : '30';
+
   return predictions.filter(p => {
+    // 1. Skip null/undefined or non-object entries
     if (!p || typeof p !== 'object') return false;
 
-    // Normalize horizon values. Fallback to '30' if no horizon field is specified.
+    // 2. Skip entries missing nodeId or with invalid/empty nodeId
+    if (p.nodeId === undefined || p.nodeId === null || p.nodeId === '') return false;
+
+    // 3. Normalize horizon values. Fallback to '30' if no horizon field is specified.
     const h = p.horizon !== undefined && p.horizon !== null ? String(p.horizon) : '30';
-    return h === String(horizon);
+    return h === targetHorizon;
   });
 }
 
