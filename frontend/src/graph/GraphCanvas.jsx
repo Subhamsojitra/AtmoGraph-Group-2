@@ -1,5 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
+import { getRiskState } from '../services/predictionService';
+import { NODE_RISK_CLASS } from '../nodeStates';
 
 /**
  * GraphCanvas Component
@@ -8,7 +10,14 @@ import * as d3 from 'd3';
  * Consumes graph dataset passed via props from the host page.
  * Refined to use ref-based simulation persistence and D3 data join updates.
  */
-export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
+const GraphCanvas = forwardRef(({ 
+  data, 
+  selectedNodeId, 
+  onNodeClick, 
+  predictions = [],
+  onZoomLevelChange,
+  panActive
+}, ref) => {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
 
@@ -17,6 +26,50 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
   const gLinksRef = useRef(null);
   const gNodesRef = useRef(null);
   const selectedNodeIdRef = useRef(null);
+  const zoomRef = useRef(null);
+  const onZoomLevelChangeRef = useRef(onZoomLevelChange);
+
+  // Sync the callback ref
+  useEffect(() => {
+    onZoomLevelChangeRef.current = onZoomLevelChange;
+  }, [onZoomLevelChange]);
+
+  const predictionsRef = useRef(predictions);
+  useEffect(() => {
+    predictionsRef.current = predictions;
+  }, [predictions]);
+
+  // Expose imperative methods to parent for programmatic controls
+  useImperativeHandle(ref, () => ({
+    zoomIn() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      const currentTransform = d3.zoomTransform(svgRef.current);
+      const currentPct = Math.round(currentTransform.k * 100);
+      const nextPct = Math.min(200, Math.max(25, Math.round((currentPct + 25) / 25) * 25));
+      const targetK = nextPct / 100;
+      
+      svg.transition().duration(250).call(zoomRef.current.scaleTo, targetK);
+      onZoomLevelChangeRef.current?.(nextPct);
+    },
+    zoomOut() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      const currentTransform = d3.zoomTransform(svgRef.current);
+      const currentPct = Math.round(currentTransform.k * 100);
+      const nextPct = Math.min(200, Math.max(25, Math.round((currentPct - 25) / 25) * 25));
+      const targetK = nextPct / 100;
+      
+      svg.transition().duration(250).call(zoomRef.current.scaleTo, targetK);
+      onZoomLevelChangeRef.current?.(nextPct);
+    },
+    resetZoom() {
+      if (!svgRef.current || !zoomRef.current) return;
+      const svg = d3.select(svgRef.current);
+      svg.transition().duration(250).call(zoomRef.current.transform, d3.zoomIdentity);
+      onZoomLevelChangeRef.current?.(100);
+    }
+  }));
 
   // Mount/Unmount cleanup effect
   useEffect(() => {
@@ -63,10 +116,17 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
 
       // Define zoom and pan behavior
       const zoom = d3.zoom()
-        .scaleExtent([0.1, 8])
+        .scaleExtent([0.25, 2.0])
         .on("zoom", (event) => {
           gMain.attr("transform", event.transform);
+          // Sync zoom percentage back to parent state if it's a user interaction
+          if (event.sourceEvent && onZoomLevelChangeRef.current) {
+            const pct = Math.round(event.transform.k * 100);
+            const clamped = Math.max(25, Math.min(200, pct));
+            onZoomLevelChangeRef.current(clamped);
+          }
         });
+      zoomRef.current = zoom;
 
       // Bind zoom behavior to the SVG container
       svg.call(zoom);
@@ -129,13 +189,30 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
     const previousNodes = simulation.nodes() || [];
     const previousNodesMap = new Map(previousNodes.map(n => [n.id, n]));
 
+    // Map predictions by nodeId for quick lookup, defending against malformed list/entries
+    const predictionsMap = new Map();
+    if (Array.isArray(predictionsRef.current)) {
+      predictionsRef.current.forEach(p => {
+        if (p && p.nodeId !== undefined && p.nodeId !== null) {
+          predictionsMap.set(p.nodeId, p);
+        }
+      });
+    }
+
     const nodes = safeNodes
       .filter(n => n && n.id !== undefined && n.id !== null)
       .map(d => {
         const prev = previousNodesMap.get(d.id);
+        const prediction = predictionsMap.get(d.id) || null;
+
+        const nodeObj = {
+          ...d,
+          prediction
+        };
+
         if (prev) {
           return {
-            ...d,
+            ...nodeObj,
             x: prev.x,
             y: prev.y,
             vx: prev.vx,
@@ -144,7 +221,7 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
             fy: prev.fy
           };
         }
-        return { ...d };
+        return nodeObj;
       });
 
     const nodeIds = new Set(nodes.map(n => n.id));
@@ -237,7 +314,20 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
       return typeColorMap.get(type) || '#718096';
     };
 
+    // Helper to determine risk class
+    const getRiskClass = (d) => {
+      const riskState = getRiskState(d.prediction);
+      return NODE_RISK_CLASS[riskState] || NODE_RISK_CLASS.none;
+    };
+
     // Apply properties to merged selections (entering + updating)
+    node
+      .attr("class", d => {
+        const isSelected = selectedNodeIdRef.current === d.id;
+        const riskClass = getRiskClass(d);
+        return `node-group graph-node ${isSelected ? 'graph-node--selected' : ''} ${riskClass}`;
+      });
+
     node.select("circle")
       .attr("fill", d => getNodeColor(d.type))
       .attr("stroke", d => (selectedNodeIdRef.current === d.id ? "#3182ce" : "#fff"))
@@ -292,6 +382,8 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
           .filter(n => n && (n.id === prevId || n.id === d.id))
           .each(function(n) {
             const isSelected = selectedNodeIdRef.current === n.id;
+            d3.select(this)
+              .classed("graph-node--selected", isSelected);
             d3.select(this).select("circle")
               .attr("stroke", isSelected ? "#3182ce" : "#fff")
               .attr("stroke-width", isSelected ? 3 : 1.5);
@@ -301,6 +393,7 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
           });
       })
       .on("mouseenter", function() {
+        d3.select(this).classed("graph-node--hover", true);
         d3.select(this).select("circle")
           .attr("stroke", "#3182ce")
           .attr("stroke-width", 3);
@@ -308,7 +401,8 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
           .style("font-weight", "600")
           .style("display", "block");
       })
-      .on("mouseleave", function(_event, d) {
+      .on("mouseleave", function(event, d) {
+        d3.select(this).classed("graph-node--hover", false);
         const isSelected = selectedNodeIdRef.current === d.id;
         d3.select(this).select("circle")
           .attr("stroke", isSelected ? "#3182ce" : "#fff")
@@ -349,6 +443,47 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, onNodeClick]);
 
+  // Sync predictions and risk state when predictions changes
+  useEffect(() => {
+    if (!simulationRef.current || !data) return;
+
+    const simulation = simulationRef.current;
+    const currentNodes = simulation.nodes() || [];
+
+    // Map predictions by nodeId for quick lookup, defending against malformed entries
+    const predictionsMap = new Map();
+    if (Array.isArray(predictions)) {
+      predictions.forEach(p => {
+        if (p && p.nodeId !== undefined && p.nodeId !== null) {
+          predictionsMap.set(p.nodeId, p);
+        }
+      });
+    }
+
+    // Update prediction object on existing nodes in the simulation in-place
+    currentNodes.forEach(node => {
+      if (node && node.id !== undefined) {
+        node.prediction = predictionsMap.get(node.id) || null;
+      }
+    });
+
+    // Helper to determine risk class
+    const getRiskClass = (d) => {
+      const riskState = getRiskState(d.prediction);
+      return NODE_RISK_CLASS[riskState] || NODE_RISK_CLASS.none;
+    };
+
+    // Update classes on the SVG nodes dynamically
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("g.node-group")
+      .attr("class", d => {
+        const isSelected = selectedNodeIdRef.current === d.id;
+        const riskClass = getRiskClass(d);
+        return `node-group graph-node ${isSelected ? 'graph-node--selected' : ''} ${riskClass}`;
+      });
+
+  }, [predictions, data]);
+
   // Sync selection styling when selectedNodeId changes
   useEffect(() => {
     const prevId = selectedNodeIdRef.current;
@@ -365,6 +500,8 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
       .filter(n => n && (n.id === prevId || n.id === selectedNodeId))
       .each(function(n) {
         const isSelected = selectedNodeId === n.id;
+        d3.select(this)
+          .classed("graph-node--selected", isSelected);
         d3.select(this).select("circle")
           .attr("stroke", isSelected ? "#3182ce" : "#fff")
           .attr("stroke-width", isSelected ? 3 : 1.5);
@@ -378,9 +515,27 @@ export default function GraphCanvas({ data, selectedNodeId, onNodeClick }) {
     <div 
       ref={containerRef} 
       className="graph-canvas-scaffold-boundary" 
-      style={{ width: '100%', height: '500px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#f7fafc', overflow: 'hidden' }}
+      style={{ 
+        width: '100%', 
+        height: '500px', 
+        border: '1px solid #e2e8f0', 
+        borderRadius: '6px', 
+        background: '#f7fafc', 
+        overflow: 'hidden',
+        cursor: panActive ? 'grab' : 'default'
+      }}
     >
-      <svg ref={svgRef} style={{ display: 'block' }}></svg>
+      <svg 
+        ref={svgRef} 
+        style={{ 
+          display: 'block', 
+          width: '100%', 
+          height: '100%',
+          cursor: panActive ? 'grab' : 'default'
+        }}
+      ></svg>
     </div>
   );
-}
+});
+
+export default GraphCanvas;

@@ -6,6 +6,157 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-02 — Day 24: Backend Prediction Stream Alignment
+* **Work completed**:
+  - **Inspected Latest Backend Architecture (Santanu & Shivangi)**:
+    - Reviewed newly merged backend implementation including Module 14 GNN Prediction API (`POST /api/v1/predictions`) and Module 15 WebSocket transport (`/api/v1/ws`).
+    - Discovered that `POST /api/v1/predictions` serves raw node-level regression values (`{ node_id: string, prediction: float }`) from the PyTorch GNN model without severity classification or horizon intervals.
+    - Inspected WebSocket endpoint (`/api/v1/ws`) and confirmed it implements the Module 15 transport lifecycle (`connected`, `ping`, `pong`). The ML streaming message types (`prediction_request`, `ripple_prediction`) are explicitly reserved for Modules 16/17 and currently return `NOT_SUPPORTED_YET`.
+  - **WebSocket Client Decision (Task 5)**:
+    - Evaluated the 5-point WebSocket decision criteria: while `/api/v1/ws` is present, prediction streaming is not yet supported by the server (returns `NOT_SUPPORTED_YET`).
+    - In accordance with team boundaries, decided **NOT** to implement a speculative WebSocket client today, avoiding manufactured contracts.
+  - **Frontend Prediction Adapter Alignment (`predictionService.js`)**:
+    - Enhanced `sanitizePredictions()` to support both backend snake_case (`node_id`) and frontend camelCase (`nodeId`), normalizing all entries to `nodeId: String(nodeId)`.
+    - Preserved raw scalar GNN regression predictions alongside optional mock/development fields (`predictedRisk`, `confidence`, `predictedLevel`, `horizon`).
+    - Updated `getPredictionData('backend')` to query `POST /api/v1/predictions` and gracefully handle HTTP 503 (e.g. no checkpoint configured or database unavailable) or network errors by returning `{ predictions: [] }`.
+    - Confirmed that absence of backend prediction data never blocks graph rendering.
+  - **Preserved Horizon Foundation & Graph Integrity**:
+    - Maintained `selectedHorizon`, `filterPredictionsByHorizon()`, and `30`/`60`/`90`/`current` state boundaries.
+    - Verified all D3 force simulation behaviors, node dragging, selection, zoom, pan, Fit/Reset, and large-graph (~2,000 nodes) optimizations remain completely intact.
+  - **Respected Team Boundaries**:
+    - Confirmed zero modifications to any backend files (`backend/`).
+    - Confirmed zero modifications to Yashaswini's timeline UI, layout, controls, or dashboard design.
+    - Confirmed zero speculative schema fields invented for Shivangi's ML models.
+  - **Automated Validation**:
+    - Verified `npm run lint` passes with 0 warnings and 0 errors (oxlint).
+    - Verified `npm run build` succeeds cleanly with production bundle compilation.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: Real-time prediction streaming requires Santanu to implement Modules 16/17 WebSocket prediction dispatcher.
+
+### 2026-09-01 — Day 23: Prediction Timeline State Integration
+* **Work completed**:
+  - Validated the prediction horizon state boundary (`selectedHorizon` at `DashboardPage.jsx` controller level) for seamless integration with Yashaswini's upcoming Week 4 timeline UI.
+  - Reinforced `filterPredictionsByHorizon(predictions, horizon)` in `predictionService.js` with defensive validation against malformed items (non-objects, missing/invalid `nodeId`, missing/unknown `horizon`, unexpected fields).
+  - Verified `current` horizon handling: cleanly clears future prediction overlays without impacting graph rendering, selection, dragging, or pan/zoom gestures.
+  - Verified prediction update behavior across horizon transitions (`30` <-> `60` <-> `90` <-> `current`): confirms that changing horizons updates node prediction data and risk classes in-place without restarting D3 force simulation, reheating forces, altering node coordinates, or clearing active selection (preserving Day 20 optimizations).
+  - Clarified the timeline UI state boundary in `DashboardPage.jsx` with clear developer integration notes for Yashaswini.
+  - Confirmed ML prediction contracts (Shivangi) and backend prediction endpoints (Santanu) remain pending, and their respective codebases and services were untouched.
+  - Verified Yashaswini's dashboard layout, sidebar, header, filters, and controls remain completely unmodified.
+  - Verified codebase quality: 0 lint errors/warnings (`npm run lint`), successful production build (`npm run build`).
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-31 — Day 22: Week 4 Prediction Timeline Foundation
+* **Work completed**:
+  - Established the frontend data/state foundation required for the company's planned 30/60/90-day prediction timeline.
+  - Implemented `filterPredictionsByHorizon(predictions, horizon)` inside `predictionService.js` to select predictions dynamically without assuming future GNN schemas.
+  - Extended mock prediction data generator (`getPredictionData`) to tag predictions with `horizon: "30"`, `"60"`, or `"90"` for testing.
+  - Established `selectedHorizon` state in `DashboardPage.jsx` and connected `filteredPredictions` to the D3 `GraphCanvas` and details panels, fully preserving existing functionality.
+  - Placed a temporary browser debugging/testing hook `window.setAtmoGraphHorizon(horizon)` explicitly marked as temporary, which can be deleted when Yashaswini binds the visual controls.
+  - Confirmed that backend prediction API or websocket endpoints do not exist yet (stub files only), leaving Santanu's backend and Shivangi's ML codes completely untouched.
+  - Verified linter rules pass with 0 errors/warnings and the production build compiles successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-30 — Day 21: Week 3 Stability & Integration Review
+* **Work completed**:
+  - Performed a comprehensive stability, integration, and regression review of the Week 3 predictive-overlay foundation and Day 20 optimizations.
+  - Confirmed the prediction flow follows the decoupled architecture: `predictionService.js` (adapter/sanitizer boundary) -> `DashboardPage.jsx` (state controller) -> `GraphCanvas.jsx` -> D3 visual presentation.
+  - Confirmed that prediction data remains fully optional and the graph canvas behaves correctly when no prediction data is available (gracefully mapping to `'unknown'` risk state/no-pulse style).
+  - Verified that Day 20 lifecycle optimizations remain fully intact: prediction updates are completely separated from the main D3 simulation lifecycle via a dedicated ref-synced `useEffect`, ensuring node updates do not restart the simulation, reheat forces, alter coordinates, or interrupt zoom/pan/drag gestures.
+  - Verified risk overlay visuals map correctly: High/At Risk (red pulsing shadow), Elevated/Medium (yellow/orange pulsing shadow), and Stable/Low/Unknown (standard node styling).
+  - Confirmed prediction details panel renders dynamically and generically, safely handling missing fields, nested objects/arrays, and formatting confidence ratios and timestamps cleanly.
+  - Reviewed backend prediction integration status: confirmed no real prediction API endpoint or finalized GNN schema is exposed by the backend/ML services yet (stub/placeholder only), and verified that the frontend gracefully handles this absence.
+  - Performed lightweight regression review across all three dataset modes (`?mode=mock`, `?mode=backend`, and `?mode=large`) to confirm node dragging, hover/selection states, pan/zoom controls, and large-graph performance optimizations remain stable.
+  - Confirmed zero modifications were made to Yashaswini's dashboard layout or components, and Santanu's backend code was left untouched.
+  - Validated build pipeline correctness: ran automated lint check (`npm run lint` via oxlint) and production build (`npm run build`), resolving successfully with 0 errors and 0 warnings.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-29 — Day 20: GNN Prediction Integration Readiness
+* **Work completed**:
+  - Reviewed and strengthened prediction service boundary (`predictionService.js`) by implementing defensive input sanitization (`sanitizePredictions`).
+  - Added robust validation checking: filters out null/undefined entries, filters out entries missing a valid `nodeId`, and resolves duplicate `nodeId` entries by keeping the first occurrence.
+  - Added type-safe normalization: only normalizes and clamps `predictedRisk` and `confidence` when values are strictly numeric (`typeof` checks), preserving non-numeric values as-is.
+  - Refined risk state fallback in `getRiskState` and `getNodeRiskState` to gracefully return `'unknown'` on unexpected object formats or unrecognized levels without crashing the dashboard.
+  - Optimized the D3 canvas lifecycle (`GraphCanvas.jsx`) by decoupling prediction updates from simulation initialization: removed `predictions` from the main `useEffect` dependency array and introduced a dedicated predictions `useEffect` utilizing a synced ref (`predictionsRef`).
+  - Decoupled prediction visual class synchronization to update dynamically in $O(N)$ time via in-place property mapping, completely preventing simulation reheating (physical drift) and UI/CPU stutter (synchronous pre-ticking rerun) upon prediction reload.
+  - Aligned selected node state in `DashboardPage.jsx` by dynamically resolving predictions for `selectedNode` before passing it to `NodeDetailsPanel` and `NodeDetailsSheet`. This ensures details panels instantly sync with updated predictions.
+  - Verified backend-mode gracefulness: confirmed empty predictions array returns successfully without making requests to non-existent prediction endpoints or crashing the UI.
+  - Checked large-graph performance: verified that large graph mode (`?mode=large` with ~2,000 nodes/3,000 links) loads efficiently and remains fully responsive to drag, pan, zoom, and fit actions.
+  - Ran automated validation checks: verified Vite production build succeeds and oxlint linter passes with 0 errors and 0 warnings.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-28 — Day 19: Integration Verification & Stability Review
+* **Work completed**:
+  - Performed lightweight stability and regression verification of the AtmoGraph frontend across all three development modes (`?mode=mock`, `?mode=backend`, and `?mode=large`).
+  - Confirmed that the Week 2 dashboard integration (Header, Sidebar, ControlsBar, Search, Filters, and layout) remains completely stable and intact with zero console errors.
+  - Verified D3 graph interaction functionality in all modes: node rendering, node hover/selection highlights, dragging behaviors, background pan/zoom controls, and fit/reset transitions work correctly.
+  - Verified prediction overlay state: At Risk (high/red pulse) and Elevated (medium/yellow pulse) risk states render correctly, while stable/unpredicted nodes remain standard. Selected-node highlighting remains intact and does not clash with the prediction overlay.
+  - Verified backend mode (`?mode=backend`) stability: verified node name/properties parsing, verified links fallback safely when missing (no fake relationships), and verified missing/empty prediction data is handled gracefully without errors.
+  - Verified large graph mode (`?mode=large` with ~2,000 nodes/3,000 links) performance optimizations: confirmed collision force bypass, Barnes-Hut charge calculation limits, increased decay rate, synchronous pre-ticking (40 ticks), and DOM text label suppression remain fully preserved and responsive.
+  - Confirmed that Week 2 integration and Week 3 prediction foundations remain fully stable and decoupled (e.g. GraphCanvas is backend-agnostic and prediction interpretation remains centralized in `predictionService.js`).
+  - Ran automated validation checks: verified Vite production build compiles successfully and oxlint linter passes with 0 errors and 0 warnings.
+  - No application code changes were necessary; Day 19 was completed as a regression verification and documentation day.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None (verification was clean).
+
+### 2026-08-27 — Day 17: Predictive Overlay Refinement & GNN Integration Readiness
+* **Work completed**:
+  - Refined the predictive overlay and centralized risk state normalization into `getNodeRiskState(node)` within `predictionService.js`.
+  - Updated visualization and info components to consume normalized risk states (`high`, `medium`, `low`, `unknown`), avoiding scattered prediction field checks.
+  - Refactored `RiskBadge` in `DashboardPage.jsx` to map normalized levels to their correct visual classes, background/text colors, and legend-aligned labels: "At Risk" (high), "Elevated" (medium), "Stable" (low), and "Stable / No prediction" (unknown).
+  - Streamlined dynamic prediction detail rendering in `NodeDetailsBody` to dynamically accept and format properties: formatted percentage confidence value cleanly for both decimals and integers, formatted timestamp to locale string under the label "Prediction Time", and formatted any potential nested objects/arrays as JSON strings to avoid crash risk.
+  - Maintained complete separation from Yashaswini's dashboard components and layout UI, preserving Header, Sidebar, ControlsBar, and existing CSS structure intact.
+  - Preserved Day 9 large-graph optimizations (~2,000 nodes/3,000 links performance) and Day 15 ref-based D3 programmatic zoom/pan controls.
+  - Kept Santanu's backend untouched; verified backend mode (`?mode=backend`) handles empty/missing predictions gracefully.
+  - Verified linter passes with 0 warnings/errors and production build compiles successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-26 — Day 16: Predictive Overlay & Risk Visualization Foundation
+* **Work completed**:
+  - Implemented the prediction-to-risk mapping boundary in `predictionService.js` via `getRiskState(prediction)`. Centralized prediction interpretation here to return `'high'`, `'medium'`, `'low'`, or `'unknown'`.
+  - Added custom styling for the new `'medium'` risk state (`graph-node--risk-medium`) using the yellow pulsing animation.
+  - Adjusted `graph-node--risk-low` to represent stable/low risk, removing the pulsing shadow to correctly distinguish stable nodes from elevated risk nodes.
+  - Integrated prediction styling with D3 in `GraphCanvas.jsx` by dynamically applying CSS classes (`graph-node`, `graph-node--selected`, `graph-node--risk-high`, `graph-node--risk-medium`, `graph-node--risk-low`) during the node data join.
+  - Ensured prediction visual highlights do not override selection outlines (`#6E8CFF` outline-offset) or break node drag-and-drop.
+  - Refactored `RiskLegend` labels in `DashboardPage.jsx` to read "At Risk", "Elevated", and "Stable / No prediction", matching the updated visual treatment.
+  - Modified `NodeDetailsBody` in `DashboardPage.jsx` to dynamically render prediction details generically. It iterates over all non-`nodeId` keys of the prediction object and formats known temporary fields (`predictedRisk`, `confidence`, `timestamp`, `predictedLevel`) nicely.
+  - Preserved Day 15 Zoom/Pan/Drag gestures and Day 9 D3 large-graph performance optimizations intact.
+  - Verified linter rules pass with 0 warnings/errors and product builds successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-25 — Day 15: Prediction Integration Continuation & Graph Control Integration
+* **Work completed**:
+  - Investigated Yashaswini's graph controls (Zoom In, Zoom Out, Fit/Reset, Pan Mode) in `ControlsBar` and found they updated only local component state without communicating with D3's internal zoom transform.
+  - Lifted `zoom` and `panActive` state variables up to `DashboardPage.jsx` and connected them to `ControlsBar` via React props.
+  - Wrapped `GraphCanvas.jsx` in `forwardRef` and exposed programmatic zoom control methods (`zoomIn()`, `zoomOut()`, and `resetZoom()`) using `useImperativeHandle`.
+  - Kept the D3 zoom transform as the authoritative source of truth for the viewport scale and translate parameters, preventing React state rendering fights.
+  - Implemented event source checking using `event.sourceEvent` to synchronize interactive zoom gestures (scroll wheel, double-click) back to the dashboard's zoom percentage state, safely bypassing feedback loops.
+  - Bound the zoom scale extent to `[0.25, 2.0]` to match the UI controls bounds.
+  - Applied active pan state styling by showing a `grab` cursor over the SVG graph canvas when Pan Mode is toggled active.
+  - Preserved all existing D3 graph physics, ResizeObserver, node dragging, background panning, dynamic node type coloring, and large graph optimization configurations.
+  - Strengthened prediction mapping in `GraphCanvas` to keep predictions fully optional, and added optional generic prediction details rendering to the details panel `NodeDetailsBody` in `DashboardPage.jsx` without assuming any final ML risk schemas or indicators.
+  - Verified compilation via `npm run build` and resolved linting checks using `npm run lint` (0 warnings, 0 errors).
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
+### 2026-08-24 — Day 14: Prediction Data Integration Foundation
+* **Work completed**:
+  - Established a clean decoupled frontend prediction-data integration boundary in `predictionService.js` to isolate prediction API fetches.
+  - Inspected backend prediction logic and verified no GNN prediction models or FastAPI prediction endpoints are currently implemented.
+  - Clearly documented that prediction schemas are pending GNN implementation, marking fields like `predictedRisk` and `confidence` as temporary development/mock values.
+  - Structured prediction data mapping conceptually around the stable `prediction.nodeId -> graph node.id` relationship.
+  - Modified `DashboardPage.jsx` minimally at the state and data controller layer to import, fetch (`getPredictionData`), and manage prediction state without modifying layout, sidebar, header, search, filters, details panels, or styling.
+  - Passed `predictions` as a prop to `<GraphCanvas />`, and updated D3 node mapping inside `GraphCanvas.jsx` to optionally associate the matched prediction object with `node.prediction`.
+  - Confirmed that absence of prediction data fallback works gracefully (returns empty prediction array in backend mode) and never blocks graph rendering.
+  - Verified linter rules pass with 0 warnings/errors and product builds successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: None.
+
 ### 2026-08-23 — Day 13: Week 2 Final Integration Validation & Mid-Project Review Readiness
 * **Work completed**:
   - Performed a comprehensive integration audit to ensure the frontend meets all Week 2 requirements: data connectivity, pan/zoom interactions, click handlers, details panel rendering, and large-graph scalability.

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
+import { getPredictionData, getNodeRiskState, filterPredictionsByHorizon } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -143,11 +144,12 @@ function ContourBackground() {
 
 function RiskBadge({ level }) {
   const map = {
-    high: { color: TOKENS.riskHigh, label: "High risk" },
-    low: { color: TOKENS.riskLow, label: "Elevated" },
-    none: { color: TOKENS.flow, label: "Stable" },
+    high: { color: TOKENS.riskHigh, label: "At Risk" },
+    medium: { color: TOKENS.riskLow, label: "Elevated" },
+    low: { color: TOKENS.flow, label: "Stable" },
+    unknown: { color: TOKENS.flow, label: "Stable / No prediction" },
   };
-  const s = map[level] || map.none;
+  const s = map[level] || map.unknown;
   return (
     <span
       className="risk-badge"
@@ -361,7 +363,7 @@ function SearchBar({ onSelect, risk, types }) {
                   <span className="search-result-name" style={{ color: TOKENS.text }}>{n.name}</span>
                   <span className="search-result-region" style={{ color: TOKENS.textDim }}>{n.region}</span>
                 </span>
-                <RiskBadge level={n.risk} />
+                <RiskBadge level={getNodeRiskState(n)} />
               </button>
             ))
           )}
@@ -476,9 +478,9 @@ function FilterPanel({ risk, setRisk, types, setTypes }) {
 
 function RiskLegend() {
   const items = [
-    { label: "Stable", color: TOKENS.flow },
+    { label: "At Risk", color: TOKENS.riskHigh },
     { label: "Elevated", color: TOKENS.riskLow },
-    { label: "High risk", color: TOKENS.riskHigh },
+    { label: "Stable / No prediction", color: TOKENS.flow },
   ];
   return (
     <div className="risk-legend" aria-label="Risk color legend">
@@ -492,17 +494,19 @@ function RiskLegend() {
   );
 }
 
-function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChange }) {
-  const [panActive, setPanActive] = useState(false);
-  const [zoom, setZoom] = useState(100);
+function ControlsBar({ 
+  onSelectNode, 
+  selectedNode, 
+  onClearSelection, 
+  zoom, 
+  panActive, 
+  onPanActiveChange,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom
+}) {
   const [risk, setRisk] = useState("All");
   const [types, setTypes] = useState([]);
-
-  const changeZoom = (next) => {
-    const clamped = Math.max(25, Math.min(200, next));
-    setZoom(clamped);
-    onZoomChange?.(clamped);
-  };
 
   const toggleType = (t) => setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
@@ -527,7 +531,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
 
         <div className="controls-zoom-group">
           <button
-            onClick={() => setPanActive((p) => !p)}
+            onClick={() => onPanActiveChange(!panActive)}
             title="Pan"
             aria-label="Toggle pan mode"
             aria-pressed={panActive}
@@ -541,7 +545,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
             <Hand size={15} />
           </button>
           <button
-            onClick={() => changeZoom(zoom - 25)}
+            onClick={onZoomOut}
             title="Zoom out"
             aria-label="Zoom out"
             className="zoom-btn"
@@ -551,7 +555,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
           </button>
           <span className="zoom-readout" style={{ color: TOKENS.text }} aria-live="polite">{zoom}%</span>
           <button
-            onClick={() => changeZoom(zoom + 25)}
+            onClick={onZoomIn}
             title="Zoom in"
             aria-label="Zoom in"
             className="zoom-btn"
@@ -560,7 +564,7 @@ function ControlsBar({ onSelectNode, selectedNode, onClearSelection, onZoomChang
             <ZoomIn size={15} />
           </button>
           <button
-            onClick={() => changeZoom(100)}
+            onClick={onResetZoom}
             title="Fit to screen (reset zoom)"
             aria-label="Fit to screen"
             className="zoom-btn"
@@ -608,7 +612,7 @@ function NodeDetailsBody({ node }) {
         <p className="node-subtitle" style={{ color: TOKENS.textDim }}>{node.type || 'default'} · {node.region || node.properties?.region || 'Unknown region'}</p>
       </div>
 
-      <RiskBadge level={node.risk || node.properties?.risk || 'none'} />
+      <RiskBadge level={getNodeRiskState(node)} />
 
       <div className="node-note-box" style={{ backgroundColor: TOKENS.surface2, border: `1px solid ${TOKENS.border}`, color: TOKENS.textDim }}>
         {node.note || node.properties?.description || node.properties?.note || 'No description available.'}
@@ -635,6 +639,54 @@ function NodeDetailsBody({ node }) {
           <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Clock size={13} /> Last updated</dt>
           <dd style={{ color: TOKENS.text }}>{node.updated || node.properties?.updated || 'N/A'}</dd>
         </div>
+        {node.prediction && Object.keys(node.prediction).filter(k => k !== 'nodeId').length > 0 && (
+          <>
+            <div className="node-meta-row" style={{ borderTop: `1px dashed ${TOKENS.border}`, paddingTop: '8px', marginTop: '8px' }}>
+              <dt className="node-meta-label" style={{ color: TOKENS.textDim, fontWeight: '600' }}>Prediction Details</dt>
+              <dd style={{ color: TOKENS.textDim }}></dd>
+            </div>
+            {Object.entries(node.prediction)
+              .filter(([key, val]) => key !== 'nodeId' && val !== undefined && val !== null && val !== '')
+              .map(([key, val]) => {
+                let label = key
+                  .replace(/([A-Z])/g, ' $1')
+                  .replace(/^./, str => str.toUpperCase());
+                
+                let formattedVal;
+                if (typeof val === 'object' && val !== null) {
+                  formattedVal = JSON.stringify(val);
+                } else {
+                  formattedVal = String(val);
+                }
+
+                if (key === 'predictedRisk' && typeof val === 'number') {
+                  const percentage = val <= 1 ? val * 100 : val;
+                  formattedVal = `${percentage.toFixed(0)}%`;
+                  label = "Predicted Risk";
+                } else if (key === 'confidence' && typeof val === 'number') {
+                  const percentage = val <= 1 ? val * 100 : val;
+                  formattedVal = `${percentage.toFixed(0)}%`;
+                  label = "Confidence";
+                } else if (key === 'timestamp') {
+                  label = "Prediction Time";
+                  try {
+                    formattedVal = new Date(val).toLocaleString();
+                  } catch {
+                    formattedVal = String(val);
+                  }
+                } else if (key === 'predictedLevel') {
+                  label = "Predicted Level";
+                }
+
+                return (
+                  <div className="node-meta-row" key={key}>
+                    <dt className="node-meta-label" style={{ color: TOKENS.textDim }}><Activity size={13} /> {label}</dt>
+                    <dd style={{ color: TOKENS.text }}>{formattedVal}</dd>
+                  </div>
+                );
+              })}
+          </>
+        )}
       </dl>
 
       <div className="node-actions-row">
@@ -684,6 +736,11 @@ export default function DashboardPage() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [fontsReady, setFontsReady] = useState(false);
 
+  // Zoom and pan active states lifted from ControlsBar
+  const [zoom, setZoom] = useState(100);
+  const [panActive, setPanActive] = useState(false);
+  const graphRef = useRef(null);
+
   // Retrieve development mode parameter from URL (?mode=mock|backend|large)
   const queryMode = new URLSearchParams(window.location.search).get('mode') || 'mock';
 
@@ -692,6 +749,38 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Prediction states for future integration
+  const [predictions, setPredictions] = useState([]);
+  const [_predictionsLoading, setPredictionsLoading] = useState(false);
+  const [_predictionsError, setPredictionsError] = useState(null);
+
+  // Prediction horizon state ('current', '30', '60', '90')
+  // Timeline UI can update selectedHorizon through this state boundary.
+  const [selectedHorizon, setSelectedHorizon] = useState("30");
+
+  // Dynamically filter prediction data for the selected horizon.
+  // This ensures GraphCanvas and details panels only render prediction states matching selectedHorizon.
+  const filteredPredictions = filterPredictionsByHorizon(predictions, selectedHorizon);
+
+  // TEMPORARY DEVELOPER VERIFICATION HOOK
+  // NOTE: This window hook is temporary and serves only as a testing bridge for manual browser verification.
+  // It is NOT part of the primary design and can be safely deleted without impacting the state/filtering architecture.
+  useEffect(() => {
+    window.setAtmoGraphHorizon = (horizon) => {
+      const validHorizons = ["current", "30", "60", "90"];
+      const horizonStr = String(horizon);
+      if (validHorizons.includes(horizonStr)) {
+        setSelectedHorizon(horizonStr);
+        console.log(`[Developer Bridge] Prediction horizon updated to: "${horizonStr}"`);
+      } else {
+        console.warn(`[Developer Bridge] Invalid horizon "${horizon}". Allowed values: ${validHorizons.join(", ")}`);
+      }
+    };
+    return () => {
+      delete window.setAtmoGraphHorizon;
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
 
@@ -699,6 +788,9 @@ export default function DashboardPage() {
     setError(null);
     setData(null);
     setSelectedNode(null);
+    setPredictions([]);
+    setPredictionsLoading(true);
+    setPredictionsError(null);
 
     getGraphData(queryMode)
       .then((res) => {
@@ -710,6 +802,19 @@ export default function DashboardPage() {
         if (!active) return;
         setError(err.message || 'An error occurred while loading graph data.');
         setLoading(false);
+      });
+
+    getPredictionData(queryMode)
+      .then((res) => {
+        if (!active) return;
+        setPredictions(res?.predictions || []);
+        setPredictionsLoading(false);
+      })
+      .catch((err) => {
+        if (!active) return;
+        console.warn("Failed to load predictions:", err);
+        setPredictionsError(err.message || 'An error occurred while loading predictions.');
+        setPredictionsLoading(false);
       });
 
     return () => {
@@ -738,6 +843,26 @@ export default function DashboardPage() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selectedNode, mobileNavOpen]);
 
+  const handleZoomIn = () => {
+    graphRef.current?.zoomIn();
+  };
+
+  const handleZoomOut = () => {
+    graphRef.current?.zoomOut();
+  };
+
+  const handleResetZoom = () => {
+    graphRef.current?.resetZoom();
+  };
+
+  // Resolve predictions dynamically for the selected node so details panel is automatically in sync
+  const selectedNodeWithLatestPrediction = selectedNode
+    ? {
+        ...selectedNode,
+        prediction: filteredPredictions.find(p => p && p.nodeId === selectedNode.id) || null
+      }
+    : null;
+
   return (
     <div className="app-shell" style={{ backgroundColor: TOKENS.bg, fontFamily: "'Inter', sans-serif", opacity: fontsReady ? 1 : 0 }}>
       <Header onMenuClick={() => setMobileNavOpen(true)} />
@@ -750,10 +875,12 @@ export default function DashboardPage() {
             onSelectNode={setSelectedNode}
             selectedNode={selectedNode}
             onClearSelection={() => setSelectedNode(null)}
-            onZoomChange={(_z) => {
-              // TODO (integration): forward this to GraphCanvas's real zoom
-              // transform once it exposes a zoom prop/callback.
-            }}
+            zoom={zoom}
+            panActive={panActive}
+            onPanActiveChange={setPanActive}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onResetZoom={handleResetZoom}
           />
           <div className="graph-canvas-wrapper" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
             {loading && (
@@ -847,18 +974,22 @@ export default function DashboardPage() {
 
             {!loading && !error && data && data.nodes.length > 0 && (
               <GraphCanvas 
+                ref={graphRef}
                 data={data} 
                 selectedNodeId={selectedNode?.id} 
                 onNodeClick={setSelectedNode} 
+                predictions={filteredPredictions}
+                onZoomLevelChange={setZoom}
+                panActive={panActive}
               />
             )}
           </div>
         </main>
 
-        <NodeDetailsPanel node={selectedNode} />
+        <NodeDetailsPanel node={selectedNodeWithLatestPrediction} />
       </div>
 
-      <NodeDetailsSheet node={selectedNode} onClose={() => setSelectedNode(null)} />
+      <NodeDetailsSheet node={selectedNodeWithLatestPrediction} onClose={() => setSelectedNode(null)} />
     </div>
   );
 }

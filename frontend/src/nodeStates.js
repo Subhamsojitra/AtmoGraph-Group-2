@@ -22,6 +22,7 @@ export const NODE_STATE_CLASS = {
 
 export const NODE_RISK_CLASS = {
   high: "graph-node--risk-high",
+  medium: "graph-node--risk-medium",
   low: "graph-node--risk-low",
   none: "graph-node--risk-none",
 };
