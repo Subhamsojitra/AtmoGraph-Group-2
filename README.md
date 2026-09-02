@@ -285,3 +285,500 @@ python -m pytest tests/test_risk_propagation_service.py -v  # unit (mocked repos
 python -m pytest tests/test_risk_propagation_api.py -v      # API (mocked service)
 python -m pytest tests/test_risk_propagation_neo4j.py -v    # real Neo4j integration (skipped when down)
 ```
+
+### Module 11 — Graph Data Preparation for GNN
+
+Module 11 turns the existing Neo4j supply-chain graph into a numerical,
+GNN-ready dataset. It implements **data preparation only** — no model,
+no training, no evaluation (those belong to Module 12+).
+
+Architecture (reuses every existing layer; no second driver/repository):
+
+```
+Existing Neo4j graph
+        ↓  GraphRepository.get_nodes / find_all_relationships (parameterized Cypher)
+app.ml.extraction       RawGraph + deterministic node-id → index mapping
+        ↓
+app.ml.features         NodeFeatureEncoder (fit/transform, stored parameters)
+        ↓
+app.ml.dataset          GraphDatasetBuilder → GraphDataset
+        ↓              (x float32 [N,F], edge_index int64 [2,E], y float32 [N])
+Module 12 — GNN model   (GraphDataset.to_pyg_data() when PyG is installed)
+```
+
+Discovered graph schema used by Module 11:
+
+| Item | Value |
+| --- | --- |
+| Node identifier | string property `id` (unique; validated, never guessed) |
+| Node properties | `id`, `name`, `aliases`, `risk_score`, `risk_level` |
+| Relationships | schema-neutral; supply-chain flow = outgoing `(a)-[r]->(b)` |
+| Canonical example type | `SUPPLIES` (same convention as Module 10) |
+
+INPUT FEATURES vs TARGET (leakage policy):
+
+| feature | source / encoding |
+| --- | --- |
+| `risk_score_norm` | Module 9 `risk_score`, min-max rescaled by config bounds |
+| `risk_level_code` | ordinal LOW=0 < MEDIUM=1 < HIGH=2 < CRITICAL=3 |
+| `label_code` | primary Neo4j label integer-encoded over a sorted vocabulary (index 0 = unseen) |
+| `out_degree_norm` / `in_degree_norm` | node degree scaled by fitted maximum |
+| **target** (`y`) | OPTIONAL, supplied via `build(target_property=...)`; **the database currently contains NO real target values**, so builds default to an unlabeled dataset (`y is None`). Synthetic labels exist ONLY in test fixtures. A labeled build requires a finite non-negative numeric property on EVERY node and hard-rejects using any feature name as the target. |
+
+Validation is strict (fail loudly, never corrupt): blank/duplicate node ids,
+dangling edges, out-of-range scores, NaN/inf values, missing targets,
+inconsistent shapes and empty graphs all raise `GraphDatasetError` subclasses.
+
+Dataset persistence uses `.npz` with `allow_pickle=False` both ways
+(`GraphDataset.to_npz` / `GraphDataset.load_npz`), carrying arrays plus the
+fitted `FeatureMetadata` JSON so inference reuses identical encoder parameters.
+Node indices are assigned over lexicographically sorted ids, making repeated
+builds byte-for-byte reproducible regardless of Neo4j row order.
+
+PyTorch Geometric is deliberately NOT in requirements.txt yet (see comments
+there); `GraphDataset.to_pyg_data()` raises a helpful `ImportError` until the
+Module 12 developer installs matching wheels for the installed torch build.
+
+Tests:
+
+```
+python -m pytest tests/test_gnn_dataset.py -q        # unit (mocked repository) - no Neo4j needed
+python -m pytest tests/test_gnn_dataset_neo4j.py -q  # real Neo4j integration (skipped when down)
+```
+### Module 12 - GNN Model Architecture (node-level delay regression)
+
+Module 12 adds the GNN architecture that consumes the Module 11 dataset. It
+implements the MODEL ONLY - no training loop, no optimizer, no evaluation and
+no prediction API (Modules 13+). The model is UNTRAINED: it must not be
+presented as predicting real delays yet.
+
+Architecture (node-level regression, one prediction per graph node):
+
+```
+node features x [N, F]                    (Module 11 NodeFeatureEncoder)
+        v
+GCNConv(F -> hidden_dim) + ReLU + Dropout
+        v   (repeated num_layers times; message passing along the
+        v    Module 11 edge direction: upstream -> downstream)
+node embeddings [N, hidden_dim]
+        v
+Linear regression head (hidden_dim -> output_dim)
+        v
+predicted downstream delay per node [N]   (output_dim == 1, default)
+```
+
+Why GCN (Kipf & Welling 2017):
+
+- Simple, well-supported and adequate for a first node-regression model; runs
+  on CPU with the pure-Python `torch_geometric` core (the compiled
+  `torch-scatter`/`torch-sparse` companion wheels are NOT required).
+- Message passing flows source -> target along `edge_index` exactly as stored
+  by Module 11 (`(source)-[rel]->(target)` = "target consumes from source"),
+  so upstream disruption features propagate toward downstream nodes - the
+  supply-chain ripple-effect task. Edges are never reversed; Neo4j
+  relationship semantics are untouched.
+- GCNConv adds self-loops internally, so isolated nodes keep their own
+  features instead of receiving an all-zero aggregate.
+
+Usage:
+
+```python
+from app.ml.model import GNNModel
+
+data = dataset.to_pyg_data()            # Module 11 export (PyG now required)
+model = GNNModel(input_dim=dataset.num_features)  # derive dim from Module 11
+predictions = model(data.x, data.edge_index)      # shape [num_nodes]
+```
+
+Contract:
+
+| Aspect | Behaviour |
+| --- | --- |
+| Output | `[num_nodes]` when `output_dim == 1` (matches Module 11 target layout `y: float32 [num_nodes]`), otherwise `[num_nodes, output_dim]`. Exactly one prediction per node - no graph-level pooling. |
+| Target leakage | Impossible by construction: `forward(x, edge_index)` has no target parameter; `y` stays reserved for the Module 13 loss. |
+| Configuration | `GNNModel(input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.1)` or `GNNModel.from_config(GNNConfig(...))`. All values are validated; violations raise `GNNModelConfigError`. Forward-pass violations (wrong width/dtype/NaN/out-of-bounds indices) raise `GNNModelInputError`. |
+| Persistence | `model.save_state(path)` / `GNNModel.load_state(path)` - a plain `{config, state_dict}` checkpoint (tensors + primitives only, loaded with `weights_only=True`; no arbitrary object deserialization). |
+| Device | Plain `nn.Module`: CPU required and default; `model.to("cuda")` works when a GPU exists. No GPU, no downloads and no internet needed. |
+| Determinism | Construction is seeded by the caller (`torch.manual_seed`); eval-mode forwards are deterministic. Dropout applies in train mode only. |
+
+STATUS - UNTRAINED: weights are randomly initialized at construction. Module 12
+proves the architecture, not accuracy: no accuracy numbers exist yet, and none
+may be claimed until Module 13 trains and evaluates the model.
+
+Install note: `pip install torch_geometric` (pure-Python wheel). It must be
+compatible with the installed torch build; `app.ml` now imports PyG, so
+Module 11's `GraphDataset.to_pyg_data()` export works out of the box.
+
+Tests:
+
+```
+python -m pytest tests/test_gnn_model.py -q   # architecture unit tests (synthetic, no Neo4j)
+```
+
+### Module 13 — GNN Training & Evaluation
+
+Module 13 adds the training/evaluation layer AROUND the existing modules. It
+trains the Module 12 `GNNModel` to predict downstream delays
+(**node-level regression**) from upstream disruption features, using the
+Module 11 `GraphDataset` unchanged. It contains NO HTTP endpoint, NO model
+serving and NO real-time inference — those belong to later modules, which
+will consume `GNNTrainer.model` or a saved checkpoint.
+
+Architecture (reuses Modules 11 & 12 unchanged; no duplicated model/dataset code):
+
+```
+Module 11  GraphDataset (x float32 [N,F], edge_index int64 [2,E], y float32 [N])
+        |   app.ml.dataset (unchanged)  ->  to_pyg_data() tensors
+        v
+Module 12  GNNModel(x, edge_index)  ->  [N] predictions (unchanged)
+        v
+Module 13  GNNTrainer                    (app.ml.training)
+        |   split_nodes() -> NodeSplit   (app.ml.splitting, seeded)
+        |   Adam + regression loss on TRAIN nodes only
+        v
+Validation (eval mode, torch.no_grad, per eval_interval)
+        v
+TrainingHistory + metrics                (app.ml.evaluation)
+        v
+state_dict checkpoints (GNNCheckpoint)   ->  later prediction module
+```
+
+New files: `app/ml/splitting.py` (deterministic node split),
+`app/ml/evaluation.py` (regression metrics), `app/ml/training.py`
+(`GNNTrainingConfig`, `TrainingHistory`, `GNNCheckpoint`, `GNNTrainer`,
+`set_seed`). No new pip dependencies; no Neo4j schema change; no API change.
+
+Usage:
+
+```python
+from app.ml.training import GNNTrainer, GNNTrainingConfig
+from app.ml.model import GNNModel
+
+dataset = GraphDatasetBuilder(repository).build(target_property="downstream_delay_days")
+model = GNNModel(input_dim=dataset.num_features, hidden_dim=64, num_layers=2, dropout=0.1)
+trainer = GNNTrainer(model, dataset, GNNTrainingConfig(epochs=200, seed=42))
+history = trainer.train()            # structured per-epoch history
+loss, metrics = trainer.evaluate_test()
+trainer.save_checkpoint("checkpoints/m13.pt")
+```
+
+
+Training objective — node-level regression only
+------------------------------------------------
+
+For N graph nodes the model produces N predictions and the loss compares them
+against ground-truth per-node delay targets on the TRAIN nodes only. There is
+no classification, no HIGH/MEDIUM/LOW classes, and no graph-level pooling.
+Targets are NEVER model inputs: `GNNModel.forward(x, edge_index)` has no
+target parameter (Module 12 anti-leakage contract) and the trainer only ever
+calls `model(x, edge_index)`.
+
+Target validation is strict (fail loudly, never fabricate): an unlabeled
+dataset (`y is None`), an empty graph, a non-finite target or a model with
+`output_dim != 1` aborts trainer construction with `GNNTrainingError`
+subclasses. The database currently contains NO real delay labels, so default
+builds are unlabeled and the trainer rejects them — synthetic labels exist
+only in clearly-marked test fixtures.
+
+Train/validation/test strategy
+------------------------------
+
+`split_nodes(num_nodes, validation_split=0.2, test_split=0.1, seed=...)`
+partitions NODE indices (transductive setup — the standard Kipf & Welling
+scheme for one graph). Why this is safe here:
+
+* Module 11 yields ONE connected supply-chain graph and Module 12 consumes
+  one `(x, edge_index)` pair for the whole graph.
+* Validation/test targets are used ONLY by their own loss/metrics — never by
+  training and never as features.
+* Module 11 guarantees targets cannot be features
+  (`_assert_no_target_leakage`), so messages passed along edges carry
+  current-state features only; validation/test labels cannot leak into
+  training through message passing.
+* An inductive subgraph split (dropping edges) is intentionally NOT used: it
+  would change the very message-passing structure the model must learn on.
+
+The split is deterministic for a given seed (a locally seeded
+`numpy.random.Generator`; the global `random`/`numpy.random` state is never
+touched), the three counts always sum to `num_nodes` (no silent data loss),
+and a dataset too small for the requested split is rejected explicitly.
+`validation_split` must be > 0 (training always validates); `test_split`
+may be 0.0 to skip the held-out test evaluation.
+
+
+Loss, optimizer, metrics, history
+---------------------------------
+
+| Aspect | Choice | Rationale |
+| --- | --- | --- |
+| Loss | `MSELoss` (default; configurable `loss="mse"`, `"mae"` or `"huber"`) | Standard differentiable regression loss; no custom loss invented because no specification requires one. |
+| Optimizer | `Adam` (`learning_rate=0.01`, `weight_decay=5e-4` defaults) | Standard, well-supported; both values configurable (defaults are the conventional GCN values of Kipf & Welling 2017). |
+| Metrics | `{"mse", "rmse", "mae", "r2"}` per split | `r2` is `None` (not NaN) when undefined — single sample or zero target variance. Empty inputs, shape mismatches and NaN/inf values raise instead of producing silent garbage. |
+| History | `TrainingHistory` (`train_loss`, `val_loss`, `train_metrics`, `val_metrics`, `stopped_early`, `best_epoch`, `best_val_loss`) | Structured and JSON-safe; `val_*[i]` is `None` for epochs where validation was skipped (`eval_interval`). Training stops loudly if the loss becomes non-finite. |
+
+Validation runs after every epoch (or every `eval_interval`-th epoch; the
+final epoch is always validated) in `model.eval()` + `torch.no_grad()` —
+parameters are never updated during validation.
+
+Early stopping, checkpointing, reproducibility
+----------------------------------------------
+
+* **Early stopping** (optional): `patience` (in validation rounds, `None` =
+  disabled) monitors the validation loss and stops when it stops improving;
+  `restore_best=True` (default) reloads the best-validation-loss weights
+  afterwards.
+* **Checkpoints**: `GNNTrainer.save_checkpoint(path)` writes a plain
+  `torch.save` mapping — `model_state_dict`, `optimizer_state_dict`, `epoch`,
+  `best_val_loss`, both configs, last validation metrics and the history —
+  and `GNNTrainer.load_checkpoint(path, model=..., optimizer=...)` restores
+  it with `torch.load(..., weights_only=True)`. No arbitrary object pickling
+  (same policy as Module 12). Trained `.pt` binaries must NOT be committed
+  to Git. `GNNTrainingConfig(checkpoint_path=...)` auto-saves after `train()`.
+* **Reproducibility**: with `GNNTrainingConfig(seed=...)` the trainer seeds
+  torch's global RNG at the start of `train()` (dropout draws from it) and
+  the node split uses its own locally seeded numpy Generator. Same seed +
+  same dataset => identical loss histories on the same machine/build
+  (verified by tests). No application-global RNG state is modified otherwise.
+
+CPU-first: the development environment is CPU-only and CPU training is fully
+supported and tested; `device="cuda"` works when a GPU exists and fails
+loudly on CPU-only machines. No downloads and no internet are needed.
+
+
+Limitations (read before trusting any numbers)
+----------------------------------------------
+
+* **No real training data exists yet.** The Neo4j database contains no
+  downstream-delay/lead-time labels, so no real-data training has been run.
+  All verification uses small SYNTHETIC datasets; none of the numbers they
+  produce may be presented as real-world predictive accuracy.
+* **Model performance depends entirely on the quality and size of the
+  training dataset.** With few labeled nodes (a handful per split) metrics
+  are noisy and the model cannot generalize; meaningful evaluation needs an
+  appropriately large, correctly labeled dataset covering realistic
+  disruption scenarios.
+* The transductive node split assumes the whole graph is available at
+  prediction time; adding new nodes requires re-encoding (Module 11
+  `transform`) and a fresh forward pass.
+* GCN with 2 layers propagates at most 2 hops; longer ripple paths need more
+  layers (or a different architecture) and more data.
+
+Tests (all synthetic, CPU-only; no Neo4j / internet / GPU required):
+
+```
+python -m pytest tests/test_gnn_training.py -q   # Module 13: config, metrics, split, training, checkpoints
+```
+
+### Module 14 — GNN Prediction / Inference
+
+Module 14 adds the prediction/serving layer AROUND the existing modules. It
+safely loads a trained Module 13 checkpoint, rebuilds the supply-chain graph
+dataset with the Module 11 builder, runs the Module 12 GNN in eval mode with
+`torch.no_grad()`, and serves one **raw predicted downstream-delay value per
+node** through a FastAPI endpoint. Modules 11-13 are reused unchanged: no
+model, dataset or training code is duplicated, the model is never retrained
+at serving time, and the regression target `y` is never an inference input.
+
+FastAPI endpoint:
+
+```
+POST /api/v1/predictions
+```
+
+Optional request body (empty body = defaults; `relationship_types` mirrors
+the Module 11 dataset builder — omitted means all outgoing relationships):
+
+```json
+{
+  "relationship_types": ["SUPPLIES"]
+}
+```
+
+Example response:
+
+```json
+{
+  "predictions": [
+    { "node_id": "entity-001", "prediction": 1.5 },
+    { "node_id": "entity-002", "prediction": 0.0 }
+  ],
+  "prediction_count": 2,
+  "timestamp": "2026-01-01T00:00:00Z"
+}
+```
+
+Architecture:
+
+```
+Trained Module 13 checkpoint (state_dict, torch.load(weights_only=True))
+        |   GNNTrainer.load_checkpoint (existing, reused)
+        v
+GNNPredictor (app.ml.prediction)   eval mode + torch.no_grad, device-validated
+        v
+GraphDatasetBuilder (Module 11, existing)  ->  GraphDataset (x, edge_index)
+        |   (y is NEVER read; unlabeled graphs predict fine)
+        v
+GNNPredictionResult  (node_id -> scalar prediction, positional mapping)
+        v
+PredictionService (app.services.prediction_service, model loaded once & reused)
+        v
+POST /api/v1/predictions  ->  PredictionResponse (Pydantic)
+```
+
+Behaviour / contract:
+
+| Aspect | Behaviour |
+| --- | --- |
+| Output | Exactly one prediction per graph node: `predictions[i] = {node_id, prediction}`, plus `prediction_count` and `timestamp`. `node_id` is the Neo4j entity identifier (the frontend maps it to its graph node id). |
+| Raw values only | `prediction` is the raw model output (node-level regression, e.g. predicted downstream delay). **No severity classification (HIGH/MEDIUM/LOW) is derived** because the specification defines no thresholds; raw value and any future classification stay strictly separate. |
+| Checkpoint behaviour | Served from `PREDICTION_CHECKPOINT_PATH` (default: unset -> endpoint returns 503). Checkpoints are produced offline by Module 13 (`GNNTrainer.save_checkpoint`), loaded with `torch.load(..., weights_only=True)` (no arbitrary object deserialization), and are never committed to Git or downloaded. Missing file -> 503; corrupt payload, weight/config mismatch or `output_dim != 1` -> loud domain errors (500), never silent garbage. |
+| Model lifecycle | Loaded lazily ONCE and reused across requests (same singleton pattern as the Neo4j database); `reload_model()` exists for post-deployment refresh. No per-request reload. |
+| Target leakage | Impossible by construction: inference reads only `x`/`edge_index`; `y` is never an input and unlabeled graphs predict fine. |
+| Input validation | Empty graphs, non-dataset objects, feature-width mismatches, NaN/infinite features and non-finite outputs all raise dedicated `app.ml.exceptions` errors instead of being repaired. |
+| Device | `PREDICTION_DEVICE` (default `cpu`); `cuda` only honoured when a GPU exists, otherwise fails loudly. CPU is fully supported and tested. |
+| Neo4j dependency | The dataset is built per request from the live graph via the existing parameterized `GraphRepository` (read-only, no schema change, no new driver). Neo4j down -> 503; empty graph -> 503. |
+
+Error mapping (responses never contain filesystem paths, stack traces or
+credentials):
+
+| Outcome | HTTP |
+| --- | --- |
+| Success | `200` |
+| Invalid request body | `422` |
+| No checkpoint configured / checkpoint file missing | `503` |
+| Neo4j unavailable / empty graph | `503` |
+| Invalid or incompatible checkpoint/model, unusable graph data | `500` |
+| Unexpected error | `500` |
+
+Configuration (see `.env.example`; both are documented assumptions, not
+official specification values):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint; unset = prediction endpoint disabled (503) |
+| `PREDICTION_DEVICE` | `cpu` | Torch device used for inference |
+
+Tests (synthetic + mocked, CPU-only; no Neo4j / internet / GPU required):
+
+```
+python -m pytest tests/test_gnn_prediction.py -q     # Module 14: inference layer (checkpoint load, validation, determinism)
+python -m pytest tests/test_prediction_service.py -q # Module 14: service orchestration (lazy model, error translation)
+python -m pytest tests/test_prediction_api.py -q     # Module 14: API contract (mocked service, status-code mapping)
+```
+
+Limitations (read before trusting any numbers):
+
+* **No real labeled data exists.** Predictions come from whatever checkpoint
+  is deployed via `PREDICTION_CHECKPOINT_PATH`. The project database contains
+  no real downstream-delay labels, so **no real-world predictive accuracy is
+  claimed anywhere**; all verification uses clearly-marked synthetic data.
+* Without a deployed checkpoint the endpoint answers `503` by design — the
+  prediction capability is deployment state and is never faked.
+* The transductive model assumes the whole graph is available at prediction
+  time (see Module 13 limitations); GCN propagates at most `num_layers` hops.
+* The prediction contract is intentionally minimal (`node_id` + raw scalar).
+  Frontend-facing fields such as `predictedRisk`/`predictedLevel` in the
+  frontend mock service are explicitly NOT part of this backend contract.
+
+### Module 15 — WebSocket Foundation
+
+Module 15 establishes a production-quality FastAPI WebSocket transport that
+later modules will use for real-time ML / ripple-effect prediction streaming.
+It implements connection lifecycle, JSON message transport, strict message
+validation and structured errors **only** — no ML inference, no GNN model and
+no database access are involved in connecting or pinging.
+
+WebSocket endpoint:
+
+```
+ws://localhost:8000/api/v1/ws
+```
+
+(HTTP API runs under `/api/v1`, so the WebSocket route lives at
+`/api/v1/ws`. FastAPI does not advertise WebSocket routes in the OpenAPI
+`/docs` schema — verify the route with the test suite or
+`app.routes` instead.)
+
+How to start the backend:
+
+```bash
+cd backend
+uvicorn app.main:app --reload
+```
+
+How to connect (Python `websockets` library):
+
+```python
+import asyncio, json
+import websockets
+
+async def main():
+    async with websockets.connect("ws://localhost:8000/api/v1/ws") as ws:
+        print(await ws.recv())                      # {"type": "connected", ...}
+        await ws.send(json.dumps({"type": "ping"}))
+        print(await ws.recv())                      # {"type": "pong", ...}
+
+asyncio.run(main())
+```
+
+Message contract (Module 15):
+
+| Direction | Type | Payload | Notes |
+| --- | --- | --- | --- |
+| Client → Server | `ping` | optional `data` object | heartbeat / liveness check |
+| Server → Client | `connected` | `client_id`, `protocol`, `supported_client_messages` | sent once, immediately after accept |
+| Server → Client | `pong` | `data.echo` = the ping's `data` (if any) | reply to a validated `ping` |
+| Server → Client | `error` | `error.code` + `error.message` | structured failure; connection stays usable |
+
+Error codes (stable, machine-readable):
+
+| Code | Meaning |
+| --- | --- |
+| `INVALID_JSON` | The text frame is not valid JSON |
+| `INVALID_MESSAGE` | Not a JSON object, missing/invalid `type`, or unknown fields |
+| `UNSUPPORTED_MESSAGE_TYPE` | Unknown message type |
+| `NOT_SUPPORTED_YET` | Recognized message reserved for Modules 16/17 (`prediction_request`, `ripple_prediction`) |
+| `INTERNAL_ERROR` | Unexpected server-side failure |
+
+Example session:
+
+```
+CLIENT CONNECT
+  ⇣
+SERVER: {"type":"connected","data":{"client_id":"…","protocol":1,
+         "supported_client_messages":["ping"]},"timestamp":"…"}
+CLIENT: {"type":"ping"}
+  ⇣
+SERVER: {"type":"pong","timestamp":"…"}
+CLIENT: {"type":"nonsense"}
+  ⇣
+SERVER: {"type":"error","error":{"code":"UNSUPPORTED_MESSAGE_TYPE",
+         "message":"Unsupported message type 'nonsense'. Supported types: ping."},
+         "timestamp":"…"}          # connection remains open
+CLIENT DISCONNECT                   # server stays healthy
+```
+
+Behaviour / contract:
+
+* The transport validates every inbound message with a strict Pydantic schema
+  (unknown top-level fields are rejected, never silently ignored).
+* Errors never contain stack traces, filesystem paths or credentials.
+* One faulty client (bad JSON, unknown type, abrupt disconnect) never crashes
+  the server or affects other connections.
+* `ConnectionManager` (`app/services/websocket_manager.py`) keeps an
+  in-process registry of live clients and offers targeted `send_json` and
+  `broadcast_json`; Modules 16/17 reuse it to push prediction streams.
+* Founding connection or pinging requires **no Neo4j and no GNN model**.
+
+Tests:
+
+```bash
+cd backend
+python -m pytest tests/test_websocket.py -q   # no Neo4j / GNN needed
+```
+
+Module 15 is the **communication foundation only**. Real-time GNN /
+ripple-effect prediction streaming is NOT implemented yet — that belongs to
+Modules 16/17, which will publish new message types (`prediction_request`,
+`ripple_prediction`) over this same transport.
+
