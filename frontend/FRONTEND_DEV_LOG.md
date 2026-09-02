@@ -6,6 +6,33 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-02 — Day 24: Backend Prediction Stream Alignment
+* **Work completed**:
+  - **Inspected Latest Backend Architecture (Santanu & Shivangi)**:
+    - Reviewed newly merged backend implementation including Module 14 GNN Prediction API (`POST /api/v1/predictions`) and Module 15 WebSocket transport (`/api/v1/ws`).
+    - Discovered that `POST /api/v1/predictions` serves raw node-level regression values (`{ node_id: string, prediction: float }`) from the PyTorch GNN model without severity classification or horizon intervals.
+    - Inspected WebSocket endpoint (`/api/v1/ws`) and confirmed it implements the Module 15 transport lifecycle (`connected`, `ping`, `pong`). The ML streaming message types (`prediction_request`, `ripple_prediction`) are explicitly reserved for Modules 16/17 and currently return `NOT_SUPPORTED_YET`.
+  - **WebSocket Client Decision (Task 5)**:
+    - Evaluated the 5-point WebSocket decision criteria: while `/api/v1/ws` is present, prediction streaming is not yet supported by the server (returns `NOT_SUPPORTED_YET`).
+    - In accordance with team boundaries, decided **NOT** to implement a speculative WebSocket client today, avoiding manufactured contracts.
+  - **Frontend Prediction Adapter Alignment (`predictionService.js`)**:
+    - Enhanced `sanitizePredictions()` to support both backend snake_case (`node_id`) and frontend camelCase (`nodeId`), normalizing all entries to `nodeId: String(nodeId)`.
+    - Preserved raw scalar GNN regression predictions alongside optional mock/development fields (`predictedRisk`, `confidence`, `predictedLevel`, `horizon`).
+    - Updated `getPredictionData('backend')` to query `POST /api/v1/predictions` and gracefully handle HTTP 503 (e.g. no checkpoint configured or database unavailable) or network errors by returning `{ predictions: [] }`.
+    - Confirmed that absence of backend prediction data never blocks graph rendering.
+  - **Preserved Horizon Foundation & Graph Integrity**:
+    - Maintained `selectedHorizon`, `filterPredictionsByHorizon()`, and `30`/`60`/`90`/`current` state boundaries.
+    - Verified all D3 force simulation behaviors, node dragging, selection, zoom, pan, Fit/Reset, and large-graph (~2,000 nodes) optimizations remain completely intact.
+  - **Respected Team Boundaries**:
+    - Confirmed zero modifications to any backend files (`backend/`).
+    - Confirmed zero modifications to Yashaswini's timeline UI, layout, controls, or dashboard design.
+    - Confirmed zero speculative schema fields invented for Shivangi's ML models.
+  - **Automated Validation**:
+    - Verified `npm run lint` passes with 0 warnings and 0 errors (oxlint).
+    - Verified `npm run build` succeeds cleanly with production bundle compilation.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: Real-time prediction streaming requires Santanu to implement Modules 16/17 WebSocket prediction dispatcher.
+
 ### 2026-09-01 — Day 23: Prediction Timeline State Integration
 * **Work completed**:
   - Validated the prediction horizon state boundary (`selectedHorizon` at `DashboardPage.jsx` controller level) for seamless integration with Yashaswini's upcoming Week 4 timeline UI.

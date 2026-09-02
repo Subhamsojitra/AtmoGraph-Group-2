@@ -4,32 +4,23 @@
  * Isolates prediction API communication from React components and D3.
  * Establishes a normalized frontend adapter boundary.
  * 
- * NOTE: The backend/ML contract is NOT finalized because Shivangi has not
- * started the ML/GNN implementation yet. There is currently no prediction API
- * contract from Santanu, nor is there a finalized prediction schema.
+ * NOTE: The backend exposes Module 14 GNN node regression (POST /api/v1/predictions)
+ * and Module 15 WebSocket transport (/api/v1/ws). The ML/GNN prediction stream
+ * over WebSocket is reserved for Modules 16/17.
  * 
- * The ONLY stable architectural relationship established today is:
+ * The stable architectural relationship is:
  *   prediction.nodeId -> graph node.id
  * 
- * All other fields (e.g., predictedRisk, predictedLevel, confidence, timestamp)
- * are temporary development/mock fields only and MUST NOT be represented as the
- * final project contract. Do not hardcode these fields throughout the application.
+ * The adapter normalizes backend fields (e.g. node_id -> nodeId) and safely
+ * handles raw scalar regression predictions without assuming unverified risk schemas.
  */
 
 /**
- * Fetches prediction data for the current graph.
- * 
- * If no real prediction endpoint exists, backend mode returns { predictions: [] }.
- * The absence of prediction data must never block graph rendering.
- * 
- * @param {string} mode - The active dataset mode ('mock', 'backend', 'large')
- * @returns {Promise<{ predictions: Array }>}
- */
-/**
  * Sanitizes and normalizes a list of prediction entries.
+ * Supports both frontend camelCase (nodeId) and backend snake_case (node_id).
  * Filters out null/undefined entries, entries without nodeId, and resolves duplicate nodeIds.
  * Only normalizes numeric predictedRisk/confidence values when they are actually numeric.
- * Preserves non-numeric values as-is.
+ * Preserves non-numeric values and raw prediction values as-is.
  * 
  * @param {Array} predictions - Raw predictions array
  * @returns {Array} Sanitized predictions array
@@ -47,21 +38,24 @@ export function sanitizePredictions(predictions) {
       continue;
     }
 
-    // 2. Skip entries missing nodeId or with invalid/empty nodeId
-    const nodeId = p.nodeId;
-    if (nodeId === undefined || nodeId === null || nodeId === '') {
-      console.warn("Prediction service: ignored prediction entry missing nodeId:", p);
+    // 2. Skip entries missing nodeId or with invalid/empty nodeId (supporting both nodeId and node_id)
+    const rawNodeId = p.nodeId !== undefined && p.nodeId !== null && p.nodeId !== ''
+      ? p.nodeId
+      : (p.node_id !== undefined && p.node_id !== null && p.node_id !== '' ? p.node_id : undefined);
+
+    if (rawNodeId === undefined) {
+      console.warn("Prediction service: ignored prediction entry missing nodeId/node_id:", p);
       continue;
     }
 
     // 3. Skip duplicate nodeIds (keep first seen)
-    const nodeIdStr = String(nodeId);
+    const nodeIdStr = String(rawNodeId);
     if (seenNodeIds.has(nodeIdStr)) {
       console.warn(`Prediction service: ignored duplicate prediction for nodeId "${nodeIdStr}":`, p);
       continue;
     }
 
-    // 4. Copy entry properties safely
+    // 4. Copy entry properties safely with normalized nodeId
     const sanitizedEntry = { ...p, nodeId: nodeIdStr };
 
     // 5. Only normalize predictedRisk when it is actually a number
@@ -107,7 +101,8 @@ export function sanitizePredictions(predictions) {
 /**
  * Fetches prediction data for the current graph.
  * 
- * If no real prediction endpoint exists, backend mode returns { predictions: [] }.
+ * In backend mode, connects to POST /api/v1/predictions. If the backend or
+ * checkpoint is unavailable (e.g. 503), it returns { predictions: [] } gracefully.
  * The absence of prediction data must never block graph rendering.
  * 
  * @param {string} mode - The active dataset mode ('mock', 'backend', 'large')
@@ -115,9 +110,27 @@ export function sanitizePredictions(predictions) {
  */
 export async function getPredictionData(mode = 'mock') {
   if (mode === 'backend') {
-    // Return empty prediction data in backend mode to support graceful failure
-    // as no real prediction endpoint is implemented in the backend yet.
-    return { predictions: [] };
+    try {
+      const response = await fetch('/api/v1/predictions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+
+      if (!response.ok) {
+        // Backend returns 503 if no checkpoint configured or database is unreachable
+        return { predictions: [] };
+      }
+
+      const data = await response.json();
+      const rawPredictions = data && Array.isArray(data.predictions) ? data.predictions : [];
+      return { predictions: sanitizePredictions(rawPredictions) };
+    } catch (err) {
+      console.warn("Prediction service: backend request failed or endpoint unavailable:", err);
+      return { predictions: [] };
+    }
   }
 
   if (mode === 'large') {
