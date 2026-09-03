@@ -103,6 +103,8 @@ def get_websocket_prediction_service() -> PredictionService:
     with a mock; the single model is never trained or downloaded here.
     """
     return get_prediction_service()
+
+
 async def run_websocket_prediction(
     message: InboundWebSocketMessage,
     service: PredictionService,

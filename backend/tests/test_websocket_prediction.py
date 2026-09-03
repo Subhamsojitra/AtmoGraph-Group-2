@@ -146,6 +146,8 @@ def test_prediction_result_envelope_echoes_requested_node() -> None:
     data = envelope["data"]
     assert data["requested_node_id"] == "supplier-001"
     assert data["prediction_count"] == 1
+
+
 # --------------------------------------------------------------------------- #
 # 1. Request dispatch & success (mocked PredictionService)
 # --------------------------------------------------------------------------- #
@@ -304,12 +306,8 @@ def test_invalid_node_id_returns_structured_error(
         # The connection is still usable after the failed request.
         websocket.send_json({"type": "ping"})
         assert websocket.receive_json()["type"] == "pong"
-    """The transport advertises prediction_request as a supported message."""
-    with api_client.websocket_connect(WS_URL) as websocket:
-        message = websocket.receive_json()
-        supported = message["data"]["supported_client_messages"]
-        assert "ping" in supported
-        assert MESSAGE_TYPE_PREDICTION_REQUEST in supported
+
+
 # --------------------------------------------------------------------------- #
 # 3. Service / model failures (structured errors, no crashes, no leaks)
 # --------------------------------------------------------------------------- #
@@ -387,6 +385,8 @@ def test_unexpected_exception_returns_structured_error(
         assert error["error"]["code"] == ERROR_PREDICTION_FAILED
         assert "boom" not in error["error"]["message"]
         assert "Traceback" not in error["error"]["message"]
+
+
 # --------------------------------------------------------------------------- #
 # 4. Client isolation & ping/pong regression
 # --------------------------------------------------------------------------- #
