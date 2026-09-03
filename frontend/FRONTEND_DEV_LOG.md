@@ -6,6 +6,33 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-04 — Day 26: Frontend Integration Hardening & Wrap-Up
+* **Work completed**:
+  - **Frontend Integration Hardening & Stability Wrap-Up**:
+    - Conducted end-to-end audit and hardening of frontend integration layers ahead of the project milestone.
+    - Verified that all frontend components, transport layers, and prediction adapters are stabilized, conflict-free, and ready for future backend/ML GNN contract completion.
+  - **WebSocket Lifecycle & Confirmed Endpoint Verification (`/api/v1/ws`)**:
+    - Verified that `/api/v1/ws` remains the single confirmed WebSocket transport endpoint.
+    - Confirmed transport layer (`websocketService.js`) is completely payload-agnostic and lifecycle-safe: reliably manages connection open, connected metadata handshake, ping/pong transport keepalives, structured error frames, clean disconnects, and reconnects without leaking sockets or maintaining stale connections across mode switches.
+    - Preserved strict transport boundary rules: no interpretation of unfinished message types (`prediction_request`, `ripple_prediction`) and zero invented schemas for real-time GNN predictions.
+    - Maintained raw message delivery pipeline: WebSocket transport delivers raw JSON frames to the prediction boundary, preserving `prediction.nodeId -> graphNode.id` as the stable node mapping contract.
+  - **Preserved Existing Prediction & Horizon Architecture**:
+    - Preserved all core prediction functions (`sanitizePredictions`, `getPredictionData`, `filterPredictionsByHorizon`, `getRiskState`, `getNodeRiskState`).
+    - Hardened `sanitizePredictions` to use composite deduplication (`nodeId` + `horizon` when present) to ensure multi-horizon mock/development datasets seamlessly retain predictions across 30, 60, and 90-day horizons.
+    - Verified prediction state flow and `selectedHorizon` state boundary (`current`, `30`, `60`, `90`) in `DashboardPage.jsx`, confirming that horizon transitions update risk overlays in-place without simulation restarts or coordinate drift.
+  - **Dashboard & D3 Graph Stability Auditing**:
+    - Confirmed that backend mode (`?mode=backend`) initializes the prediction stream safely and handles backend/endpoint unavailability (HTTP 503, network disconnects) gracefully without blank screens or uncaught exceptions.
+    - Verified that WebSocket disconnection or transport errors do not disrupt D3 force graph rendering or UI responsiveness.
+    - Verified that mode switching (`?mode=mock`, `?mode=backend`, `?mode=large`) cleanly disposes of listeners, intervals, and WebSocket instances.
+    - Verified all D3 graph interactions remain fluid and functional: node selection, hover highlights, drag gestures, background zoom/pan, imperative Fit/Reset controls, and large-graph optimizations (~2,000 nodes/3,000 links).
+  - **Strict Team Boundaries & Conflict Safety**:
+    - Maintained zero changes to backend services (`backend/**`), Santanu's API routes, Shivangi's PyTorch ML/GNN models, and Yashaswini's dashboard layout and UI components.
+  - **Automated Validation Results**:
+    - Oxlint (`npm run lint`): 0 warnings, 0 errors across all frontend files.
+    - Vite build (`npm run build`): Clean production bundle compilation in ~2.7s.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: Real-time GNN prediction streaming remains dependent on the backend/ML team finalizing the GNN payload schema and WebSocket dispatcher in Modules 16/17.
+
 ### 2026-09-03 — Day 25: Real-Time Prediction Transport Readiness
 * **Work completed**:
   - **Confirmed Backend WebSocket Transport (/api/v1/ws)**:
