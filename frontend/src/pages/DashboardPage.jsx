@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import GraphCanvas from "../graph/GraphCanvas";
 import { getGraphData } from "../services/graphService";
-import { getPredictionData, getNodeRiskState, filterPredictionsByHorizon } from "../services/predictionService";
+import { getPredictionData, getNodeRiskState, filterPredictionsByHorizon, connectPredictionStream } from "../services/predictionService";
 import "../DashboardPage.css";
 
 /* ============================================================
@@ -819,6 +819,36 @@ export default function DashboardPage() {
 
     return () => {
       active = false;
+    };
+  }, [queryMode]);
+
+  // Real-time prediction WebSocket stream transport lifecycle (Day 25 readiness)
+  // Connects to /api/v1/ws when queryMode is 'backend', cleanly tearing down on unmount or mode change.
+  useEffect(() => {
+    if (queryMode !== 'backend') return;
+
+    const stream = connectPredictionStream({
+      onConnected: (info) => {
+        console.log("[WebSocket Transport] Connected to /api/v1/ws:", info);
+      },
+      onMessage: (msg) => {
+        // Raw message delivery - ready for future finalized GNN payload
+        if (msg?.type === 'error') {
+          console.warn("[WebSocket Transport] Structured server error:", msg.error);
+        } else if (msg?.type === 'pong') {
+          console.debug("[WebSocket Transport] Pong received:", msg);
+        }
+      },
+      onError: (err) => {
+        console.warn("[WebSocket Transport] Transport error (handled gracefully):", err);
+      },
+      onStatusChange: (status) => {
+        console.log(`[WebSocket Transport] Status changed to: ${status}`);
+      }
+    });
+
+    return () => {
+      stream.disconnect();
     };
   }, [queryMode]);
 

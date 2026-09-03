@@ -1,15 +1,27 @@
+import { createWebSocketTransport } from './websocketService';
+
 /**
  * Prediction Service Boundary
  * 
- * Isolates prediction API communication from React components and D3.
+ * Isolates prediction API communication and WebSocket transport from React components and D3.
  * Establishes a normalized frontend adapter boundary.
  * 
  * NOTE: The backend exposes Module 14 GNN node regression (POST /api/v1/predictions)
- * and Module 15 WebSocket transport (/api/v1/ws). The ML/GNN prediction stream
- * over WebSocket is reserved for Modules 16/17.
+ * and Module 15 WebSocket transport (/api/v1/ws).
+ * 
+ * The confirmed transport flow is:
+ *   Confirmed WebSocket endpoint (/api/v1/ws)
+ *     ↓
+ *   WebSocket transport (lifecycle, ping/pong, errors, disconnects)
+ *     ↓
+ *   Raw message delivery
+ *     ↓
+ *   Prediction service boundary
+ *     ↓
+ *   Future finalized GNN payload
  * 
  * The stable architectural relationship is:
- *   prediction.nodeId -> graph node.id
+ *   prediction.nodeId -> graphNode.id
  * 
  * The adapter normalizes backend fields (e.g. node_id -> nodeId) and safely
  * handles raw scalar regression predictions without assuming unverified risk schemas.
@@ -320,4 +332,54 @@ export function getNodeRiskState(node) {
   return 'unknown';
 }
 
+/**
+ * Creates and connects a real-time prediction WebSocket stream.
+ * 
+ * Flow:
+ *   Confirmed WebSocket endpoint (/api/v1/ws)
+ *     ↓
+ *   WebSocket transport
+ *     ↓
+ *   Raw message delivery
+ *     ↓
+ *   Prediction service boundary
+ *     ↓
+ *   Future finalized GNN payload
+ * 
+ * This boundary is payload-agnostic and safely delivers raw messages to
+ * registered callbacks without assuming unfinalized GNN schemas.
+ * 
+ * @param {Object} [handlers]
+ * @param {Function} [handlers.onMessage] - Receives raw parsed WebSocket messages
+ * @param {Function} [handlers.onError] - Receives transport error events
+ * @param {Function} [handlers.onStatusChange] - Receives status string ('connecting'|'connected'|'disconnected'|'error')
+ * @param {Function} [handlers.onConnected] - Receives connection metadata payload
+ * @param {Object} [options] - Additional transport options (e.g. autoReconnect, url)
+ * @returns {Object} Transport control object { transport, disconnect, send, ping }
+ */
+export function connectPredictionStream(handlers = {}, options = {}) {
+  const transport = createWebSocketTransport(options);
 
+  if (handlers.onMessage) {
+    transport.on('message', handlers.onMessage);
+  }
+  if (handlers.onError) {
+    transport.on('error', handlers.onError);
+  }
+  if (handlers.onStatusChange) {
+    transport.on('status', handlers.onStatusChange);
+  }
+  if (handlers.onConnected) {
+    transport.on('connected', handlers.onConnected);
+  }
+
+  transport.connect();
+
+  return {
+    transport,
+    disconnect: () => transport.disconnect(),
+    send: (msg) => transport.send(msg),
+    ping: (data) => transport.ping(data),
+    getStatus: () => transport.getStatus(),
+  };
+}

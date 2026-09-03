@@ -6,6 +6,36 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-03 — Day 25: Real-Time Prediction Transport Readiness
+* **Work completed**:
+  - **Confirmed Backend WebSocket Transport (/api/v1/ws)**:
+    - Reviewed Santanu's confirmed WebSocket transport endpoint at `/api/v1/ws`.
+    - Confirmed transport capabilities: connection lifecycle (open/connect), connected metadata handshake, ping/pong transport keepalive, structured error frames, multi-client support, and clean disconnect handling.
+    - Confirmed that message types `prediction_request` and `ripple_prediction` are reserved for Modules 16/17, and the WebSocket does not currently execute the GNN prediction pipeline.
+    - Confirmed final prediction message schema is pending, and 30/60/90-day horizons are not currently part of the backend WebSocket output.
+  - **Implemented Isolated Frontend WebSocket Transport Boundary (`websocketService.js`)**:
+    - Built a modular, payload-agnostic `WebSocketTransport` class to manage raw WebSocket connections to `/api/v1/ws`.
+    - Implemented lifecycle event handling: connection/open, safe JSON frame reception, structured error interception, and clean disconnects.
+    - Provided event subscription helpers (`on('message')`, `on('status')`, `on('error')`, `on('connected')`, `on('close')`) and transport helpers (`send()`, `ping()`, `disconnect()`).
+    - Strictly avoided assuming any prediction schema fields (`predictedRisk`, `confidence`, `horizon`, `timestamp`, etc.) in the transport layer.
+  - **Integrated Transport with Prediction Service Layer (`predictionService.js`)**:
+    - Connected the WebSocket transport boundary to `predictionService.js` via `connectPredictionStream()`.
+    - Established raw message delivery pipeline:
+      `Confirmed WebSocket endpoint (/api/v1/ws) -> WebSocket transport -> Raw message delivery -> Prediction service boundary -> Future finalized GNN payload`
+    - Maintained `prediction.nodeId -> graphNode.id` as the only confirmed architectural relationship.
+    - Ready for finalized prediction schema integration once Santanu and Shivangi finalize the contract in Modules 16/17.
+  - **Preserved Existing Mock & Horizon Architecture**:
+    - Integrated clean lifecycle hook in `DashboardPage.jsx` when in backend mode (`queryMode === 'backend'`) with graceful error handling and clean disconnects on unmount/mode switch.
+    - Maintained existing mock prediction flow (`?mode=mock`), large-graph mode (`?mode=large`), and 30/60/90 frontend horizon foundation (`filterPredictionsByHorizon`, `selectedHorizon`) without regression.
+  - **Conflict-Safety & Zero Disruptions**:
+    - Zero modifications to backend code (`backend/**`), ML/GNN code, Yashaswini's UI layout/components, or `GraphCanvas.jsx`.
+    - Preserved D3 force simulation, node dragging, selection, zoom/pan, and details panel syncing.
+  - **Automated Quality Verification**:
+    - Ran `npm run lint` (oxlint): 0 warnings, 0 errors.
+    - Ran `npm run build` (vite): build completed successfully.
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: Prediction payload interpretation will be wired once Santanu and Shivangi provide the finalized GNN message schema.
+
 ### 2026-09-02 — Day 24: Backend Prediction Stream Alignment
 * **Work completed**:
   - **Inspected Latest Backend Architecture (Santanu & Shivangi)**:
