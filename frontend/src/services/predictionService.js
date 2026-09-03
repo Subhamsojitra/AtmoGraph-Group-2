@@ -40,7 +40,7 @@ import { createWebSocketTransport } from './websocketService';
 export function sanitizePredictions(predictions) {
   if (!Array.isArray(predictions)) return [];
 
-  const seenNodeIds = new Set();
+  const seenKeys = new Set();
   const sanitized = [];
 
   for (const p of predictions) {
@@ -60,9 +60,10 @@ export function sanitizePredictions(predictions) {
       continue;
     }
 
-    // 3. Skip duplicate nodeIds (keep first seen)
+    // 3. Skip duplicate nodeIds for the same horizon (keep first seen)
     const nodeIdStr = String(rawNodeId);
-    if (seenNodeIds.has(nodeIdStr)) {
+    const dedupKey = p.horizon !== undefined && p.horizon !== null ? `${nodeIdStr}#${p.horizon}` : nodeIdStr;
+    if (seenKeys.has(dedupKey)) {
       console.warn(`Prediction service: ignored duplicate prediction for nodeId "${nodeIdStr}":`, p);
       continue;
     }
@@ -103,7 +104,7 @@ export function sanitizePredictions(predictions) {
       }
     }
 
-    seenNodeIds.add(nodeIdStr);
+    seenKeys.add(dedupKey);
     sanitized.push(sanitizedEntry);
   }
 
