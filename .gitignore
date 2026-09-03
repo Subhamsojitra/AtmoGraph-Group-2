@@ -16,3 +16,8 @@ env/
 .idea/
 .DS_Store
 backend/uvicorn_output.txt
+
+# Trained GNN checkpoints (never committed; produced by
+# backend/scripts/train_gnn.py, see README "Training and deploying a
+# checkpoint")
+backend/checkpoints/

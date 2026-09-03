@@ -563,10 +563,14 @@ class GNNTrainer:
                 },
             )
 
+        # Attach the history BEFORE the config-driven auto-save so the saved
+        # checkpoint carries the correct provenance (epoch, best validation
+        # loss, metrics) instead of the "no history yet" defaults.
+        self.history = history
+
         if cfg.checkpoint_path is not None:
             self.save_checkpoint(cfg.checkpoint_path)
 
-        self.history = history
         logger.info(
             "GNN training finished",
             extra={

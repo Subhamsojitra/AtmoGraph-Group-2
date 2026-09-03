@@ -34,9 +34,9 @@ Behaviour:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
-from app.core.config import settings
+from app.core.config import BACKEND_DIR, settings
 from app.core.logger import get_logger
 from app.ml.dataset import GraphDataset, GraphDatasetBuilder
 from app.ml.prediction import GNNPredictor
@@ -49,6 +49,21 @@ from app.schemas.prediction import (
 logger = get_logger(__name__)
 
 __all__ = ["ModelNotAvailableError", "PredictionService"]
+
+
+def _resolve_checkpoint_path(raw: Union[str, Path]) -> Path:
+    """Turn a configured checkpoint location into an absolute path.
+
+    Absolute paths are used unchanged. Relative paths are resolved against
+    the backend directory (the same ``__file__``-derived convention as
+    :mod:`app.core.config`), so a setting like
+    ``PREDICTION_CHECKPOINT_PATH=checkpoints/gnn_m13.pt`` works no matter
+    which working directory the server was launched from.
+    """
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return BACKEND_DIR / path
 
 
 class ModelNotAvailableError(Exception):
@@ -97,9 +112,14 @@ class PredictionService:
 
     @property
     def checkpoint_path(self) -> Optional[Path]:
-        """Configured checkpoint path, or ``None`` when serving is disabled."""
+        """Configured checkpoint path, or ``None`` when serving is disabled.
+
+        Relative configured paths are resolved against the backend directory
+        (see :func:`_resolve_checkpoint_path`), so the value is always an
+        absolute :class:`~pathlib.Path` when a checkpoint is configured.
+        """
         raw = self._checkpoint_override or settings.prediction_checkpoint_path
-        return Path(raw) if raw else None
+        return _resolve_checkpoint_path(raw) if raw else None
 
     @property
     def device(self) -> str:

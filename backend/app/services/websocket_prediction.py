@@ -85,6 +85,9 @@ _MODEL_FILE_MISSING_MESSAGE = (
 _GRAPH_DATA_UNAVAILABLE_MESSAGE = (
     "Prediction failed: the graph data is unavailable or incomplete."
 )
+_NEO4J_UNAVAILABLE_MESSAGE = (
+    "Prediction failed: the graph database is currently unavailable."
+)
 _INFERENCE_FAILED_MESSAGE = (
     "Prediction failed: the model could not produce a valid prediction."
 )
@@ -147,6 +150,18 @@ async def run_websocket_prediction(
             ERROR_PREDICTION_FAILED, _GRAPH_DATA_UNAVAILABLE_MESSAGE
         )
     except (GNNPredictionError, ServiceUnavailable, Neo4jError) as exc:
+        # ServiceUnavailable (a Neo4jError subclass) gets its own client-safe
+        # message so a database outage is never reported as a model failure:
+        # infrastructure problems stay clearly distinguishable from inference
+        # problems (same stable error code, more precise message).
+        if isinstance(exc, ServiceUnavailable):
+            logger.error(
+                "WebSocket prediction: Neo4j service unavailable",
+                extra={"error": str(exc)},
+            )
+            return build_error_message(
+                ERROR_PREDICTION_FAILED, _NEO4J_UNAVAILABLE_MESSAGE
+            )
         logger.error(
             "WebSocket prediction: inference failed",
             extra={"error": str(exc)},

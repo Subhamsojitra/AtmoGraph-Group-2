@@ -655,8 +655,54 @@ official specification values):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint; unset = prediction endpoint disabled (503) |
+| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint (relative paths resolve against `backend/`, independent of the launch directory); unset = prediction disabled (HTTP 503 / WebSocket `MODEL_UNAVAILABLE`) |
 | `PREDICTION_DEVICE` | `cpu` | Torch device used for inference |
+
+Training and deploying a checkpoint
+-----------------------------------
+
+The prediction endpoint and the Module 16 WebSocket `prediction_request` stay
+disabled until a trained Module 13 checkpoint is configured. Two offline
+scripts under `backend/scripts/` produce one using the EXISTING pipeline
+(no new model code, no serving changes):
+
+1. *(optional, for graph-based training)* Seed a clearly-marked synthetic demo
+   supply-chain graph (label `DemoEntity`, `:SUPPLIES` edges, a finite
+   non-negative `downstream_delay_days` on every node) into a RUNNING Neo4j:
+
+   ```bash
+   cd backend
+   python scripts/seed_demo_graph.py          # add --wipe to remove it again
+   ```
+
+2. Train and save the checkpoint (auto-saved by
+   `GNNTrainingConfig.checkpoint_path` after `GNNTrainer.train()`):
+
+   ```bash
+   cd backend
+   python scripts/train_gnn.py --synthetic    # no Neo4j needed (synthetic data)
+   python scripts/train_gnn.py                # trains on the LIVE Neo4j graph
+   ```
+
+   Both modes run the same real training loop — only the data source differs.
+   `--synthetic` is clearly marked and exists so the serving path can be
+   exercised before real labels exist; live mode requires a numeric target
+   property on EVERY node (the Module 11 builder fails loudly otherwise and
+   never fabricates labels).
+
+3. Point the server at the artifact (in the root `.env`, which is never
+   committed):
+
+   ```bash
+   PREDICTION_CHECKPOINT_PATH=checkpoints/gnn_m13.pt
+   ```
+
+   The default output `checkpoints/gnn_m13.pt` is gitignored — trained `.pt`
+   binaries must NOT be committed (repo policy).
+
+4. Restart the backend and verify over a real WebSocket (see the Module 16
+   smoke-test client): `uvicorn app.main:app --port 8765` then
+   `python _smoke_ws_client.py`.
 
 Tests (synthetic + mocked, CPU-only; no Neo4j / internet / GPU required):
 
@@ -866,7 +912,10 @@ Error codes added by Module 16 (same `error` envelope): `MODEL_UNAVAILABLE`
 graph, invalid/incompatible model, inference failure, Neo4j unavailable,
 unexpected server error) and `NODE_NOT_FOUND` (requested node has no
 prediction). All errors are client-safe (no paths, tracebacks or credentials)
-and never terminate the connection.
+and never terminate the connection. Within `PREDICTION_FAILED` the message
+distinguishes a Neo4j outage ("the graph database is currently unavailable")
+from a model/inference failure so infrastructure problems are never mistaken
+for model problems.
 
 #### Are 30/60/90-day horizons supported?
 
@@ -895,4 +944,40 @@ Tests (mocked PredictionService — no Neo4j / checkpoint / GPU required):
 cd backend
 python -m pytest tests/test_websocket.py tests/test_websocket_prediction.py -q
 ```
+
+Real-checkpoint integration tests (real Module 13 checkpoint -> real
+`PredictionService` -> WebSocket `prediction_result`; only the Neo4j dataset
+builder is stubbed, exactly like `tests/test_prediction_service.py`):
+
+```bash
+cd backend
+python -m pytest tests/test_real_checkpoint_serving.py -q
+```
+
+#### Live smoke test (real checkpoint + real graph)
+
+With a trained checkpoint configured (see Module 14 "Training and deploying a
+checkpoint") and Neo4j running with at least one entity, verify the full
+WebSocket flow against a live server:
+
+```bash
+cd backend
+uvicorn app.main:app --port 8765        # terminal 1
+python _smoke_ws_client.py              # terminal 2
+```
+
+Expected: `CONNECT -> PING -> PREDICTION_REQUEST -> prediction_result (REAL
+model output) -> single-node result -> PING -> DISCONNECT` and
+`SMOKE TEST PASSED`. The client exits non-zero and prints the exact remediation
+when it instead receives:
+
+* `MODEL_UNAVAILABLE` — no checkpoint configured / file missing
+  (train one: `python scripts/train_gnn.py`, then set
+  `PREDICTION_CHECKPOINT_PATH`);
+* `PREDICTION_FAILED` + "graph database is currently unavailable" — Neo4j is
+  down (start it; seed demo data with `python scripts/seed_demo_graph.py` if
+  the graph is empty);
+* any other `PREDICTION_FAILED` — graph/model inference failure (check the
+  server logs).
+
 
