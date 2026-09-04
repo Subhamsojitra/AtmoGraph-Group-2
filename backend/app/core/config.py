@@ -41,8 +41,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # it was launched from anywhere other than ``backend/`` (e.g. the repository
 # root).  Deriving the path from ``__file__`` makes configuration loading
 # independent of the current working directory.
-_BACKEND_DIR = Path(__file__).resolve().parents[2]  # .../backend
-_PROJECT_ROOT = _BACKEND_DIR.parent                # .../AtmoGraph-Group-2
+#
+# ``BACKEND_DIR`` is public for the same reason: other modules (e.g. the
+# prediction service resolving a relative ``PREDICTION_CHECKPOINT_PATH``) use
+# it so that configured relative paths never depend on the launch directory.
+BACKEND_DIR = Path(__file__).resolve().parents[2]    # .../backend
+_PROJECT_ROOT = BACKEND_DIR.parent                   # .../AtmoGraph-Group-2
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
 

@@ -655,8 +655,54 @@ official specification values):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint; unset = prediction endpoint disabled (503) |
+| `PREDICTION_CHECKPOINT_PATH` | *(unset)* | Path to a Module 13 checkpoint (relative paths resolve against `backend/`, independent of the launch directory); unset = prediction disabled (HTTP 503 / WebSocket `MODEL_UNAVAILABLE`) |
 | `PREDICTION_DEVICE` | `cpu` | Torch device used for inference |
+
+Training and deploying a checkpoint
+-----------------------------------
+
+The prediction endpoint and the Module 16 WebSocket `prediction_request` stay
+disabled until a trained Module 13 checkpoint is configured. Two offline
+scripts under `backend/scripts/` produce one using the EXISTING pipeline
+(no new model code, no serving changes):
+
+1. *(optional, for graph-based training)* Seed a clearly-marked synthetic demo
+   supply-chain graph (label `DemoEntity`, `:SUPPLIES` edges, a finite
+   non-negative `downstream_delay_days` on every node) into a RUNNING Neo4j:
+
+   ```bash
+   cd backend
+   python scripts/seed_demo_graph.py          # add --wipe to remove it again
+   ```
+
+2. Train and save the checkpoint (auto-saved by
+   `GNNTrainingConfig.checkpoint_path` after `GNNTrainer.train()`):
+
+   ```bash
+   cd backend
+   python scripts/train_gnn.py --synthetic    # no Neo4j needed (synthetic data)
+   python scripts/train_gnn.py                # trains on the LIVE Neo4j graph
+   ```
+
+   Both modes run the same real training loop — only the data source differs.
+   `--synthetic` is clearly marked and exists so the serving path can be
+   exercised before real labels exist; live mode requires a numeric target
+   property on EVERY node (the Module 11 builder fails loudly otherwise and
+   never fabricates labels).
+
+3. Point the server at the artifact (in the root `.env`, which is never
+   committed):
+
+   ```bash
+   PREDICTION_CHECKPOINT_PATH=checkpoints/gnn_m13.pt
+   ```
+
+   The default output `checkpoints/gnn_m13.pt` is gitignored — trained `.pt`
+   binaries must NOT be committed (repo policy).
+
+4. Restart the backend and verify over a real WebSocket (see the Module 16
+   smoke-test client): `uvicorn app.main:app --port 8765` then
+   `python _smoke_ws_client.py`.
 
 Tests (synthetic + mocked, CPU-only; no Neo4j / internet / GPU required):
 
@@ -683,10 +729,11 @@ Limitations (read before trusting any numbers):
 ### Module 15 — WebSocket Foundation
 
 Module 15 establishes a production-quality FastAPI WebSocket transport that
-later modules will use for real-time ML / ripple-effect prediction streaming.
+Modules 16/17 use for real-time ML / ripple-effect prediction streaming.
 It implements connection lifecycle, JSON message transport, strict message
-validation and structured errors **only** — no ML inference, no GNN model and
-no database access are involved in connecting or pinging.
+validation and structured errors **only** — connecting and pinging involve no
+ML inference, no GNN model and no database access. Module 16 (below) adds GNN
+prediction streaming on top of this same transport.
 
 WebSocket endpoint:
 
@@ -721,13 +768,15 @@ async def main():
 asyncio.run(main())
 ```
 
-Message contract (Module 15):
+Message contract (Module 15 foundation / Module 16 prediction extension):
 
 | Direction | Type | Payload | Notes |
 | --- | --- | --- | --- |
 | Client → Server | `ping` | optional `data` object | heartbeat / liveness check |
+| Client → Server | `prediction_request` | optional `data` object with `node_id` and/or `relationship_types` | Module 16: run the trained GNN over the current graph |
 | Server → Client | `connected` | `client_id`, `protocol`, `supported_client_messages` | sent once, immediately after accept |
 | Server → Client | `pong` | `data.echo` = the ping's `data` (if any) | reply to a validated `ping` |
+| Server → Client | `prediction_result` | `data.predictions`, `data.prediction_count`, `data.timestamp` (the Module 14 `PredictionResponse`) | Module 16: reply to a validated `prediction_request` |
 | Server → Client | `error` | `error.code` + `error.message` | structured failure; connection stays usable |
 
 Error codes (stable, machine-readable):
@@ -735,9 +784,12 @@ Error codes (stable, machine-readable):
 | Code | Meaning |
 | --- | --- |
 | `INVALID_JSON` | The text frame is not valid JSON |
-| `INVALID_MESSAGE` | Not a JSON object, missing/invalid `type`, or unknown fields |
+| `INVALID_MESSAGE` | Not a JSON object, missing/invalid `type`, invalid prediction payload, or unknown fields |
 | `UNSUPPORTED_MESSAGE_TYPE` | Unknown message type |
-| `NOT_SUPPORTED_YET` | Recognized message reserved for Modules 16/17 (`prediction_request`, `ripple_prediction`) |
+| `NOT_SUPPORTED_YET` | Recognized message reserved for the future Module 17 (`ripple_prediction`) |
+| `MODEL_UNAVAILABLE` | No trained GNN model configured, or the configured checkpoint file is missing |
+| `PREDICTION_FAILED` | Empty/unusable graph, invalid/incompatible checkpoint or model, inference failure, Neo4j unavailable, or unexpected server error |
+| `NODE_NOT_FOUND` | The requested `node_id` has no prediction in the current graph |
 | `INTERNAL_ERROR` | Unexpected server-side failure |
 
 Example session:
@@ -763,22 +815,169 @@ Behaviour / contract:
 * The transport validates every inbound message with a strict Pydantic schema
   (unknown top-level fields are rejected, never silently ignored).
 * Errors never contain stack traces, filesystem paths or credentials.
-* One faulty client (bad JSON, unknown type, abrupt disconnect) never crashes
-  the server or affects other connections.
+* One faulty client (bad JSON, unknown type, invalid prediction request,
+  failing inference, abrupt disconnect) never crashes the server or affects
+  other connections.
 * `ConnectionManager` (`app/services/websocket_manager.py`) keeps an
   in-process registry of live clients and offers targeted `send_json` and
-  `broadcast_json`; Modules 16/17 reuse it to push prediction streams.
-* Founding connection or pinging requires **no Neo4j and no GNN model**.
+  `broadcast_json`; later modules reuse it to push prediction streams.
+* Connecting, pinging and validating messages require **no Neo4j and no GNN
+  model**. Only a validated `prediction_request` touches the Module 14
+  prediction pipeline (once per request, off the event loop).
 
 Tests:
 
 ```bash
 cd backend
-python -m pytest tests/test_websocket.py -q   # no Neo4j / GNN needed
+python -m pytest tests/test_websocket.py -q   # Module 15 transport, no Neo4j / GNN needed
 ```
 
-Module 15 is the **communication foundation only**. Real-time GNN /
-ripple-effect prediction streaming is NOT implemented yet — that belongs to
-Modules 16/17, which will publish new message types (`prediction_request`,
-`ripple_prediction`) over this same transport.
+### Module 16 — WebSocket → GNN Prediction Integration
+
+Module 16 connects the Module 15 transport to the existing Module 14 GNN
+prediction pipeline. The transport itself is unchanged; the only new message is
+`prediction_request` (client → server) with its `prediction_result` reply.
+
+Architecture:
+
+```text
+Frontend
+   |  WebSocket request (prediction_request)
+   v
+FastAPI WebSocket  /api/v1/ws   (app.api.websocket — transport only)
+   |  validated InboundWebSocketMessage
+   v
+app.services.websocket_prediction  (Module 16 dispatcher — async wrapper)
+   |  blocking Module 14 inference moved to a worker thread
+   v
+PredictionService.get_predictions  (Module 14, existing model loaded once)
+   |  GraphDatasetBuilder (Module 11) -> GNNPredictor (existing checkpoint)
+   v
+PredictionResponse  ->  prediction_result envelope | structured error
+```
+
+Request (client → server):
+
+```json
+{
+  "type": "prediction_request",
+  "data": {
+    "node_id": "supplier-001",
+    "relationship_types": ["SUPPLIES"]
+  }
+}
+```
+
+Both `data` fields are optional:
+
+* `node_id` — return exactly one graph node's prediction. The server always
+  runs the existing whole-graph inference and then selects ONLY the requested
+  node from the real model output. A node id that has no prediction in the
+  current graph yields a structured `NODE_NOT_FOUND` error. Field naming on
+  the wire is `node_id` (the backend REST contract); the frontend maps it to
+  its graph node id (`prediction.nodeId`).
+* `relationship_types` — passed through unchanged to the Module 11 dataset
+  builder (same semantics as `POST /api/v1/predictions`).
+
+Response (server → client) for a `prediction_request`:
+
+```json
+{
+  "type": "prediction_result",
+  "timestamp": "…",
+  "data": {
+    "predictions": [
+      { "node_id": "supplier-001", "prediction": 72.4 },
+      { "node_id": "supplier-002", "prediction": 5.1 }
+    ],
+    "prediction_count": 2,
+    "timestamp": "…"
+  }
+}
+```
+
+`data` is exactly the Module 14 `PredictionResponse` (the same shape as
+`POST /api/v1/predictions`), so the WebSocket and REST contracts never
+diverge. When a single node was requested, its id is echoed as
+`data.requested_node_id` and `predictions` contains exactly one entry.
+
+Node identification: the backend contract field is **`node_id`** on every
+prediction entry; the frontend maps `prediction.nodeId` →
+`data.predictions[i].node_id` → graph node `id`. The `nodeId` camelCase name
+is **not** accepted on the wire — the strict payload schema rejects it with an
+`INVALID_MESSAGE` error so typos are never silently ignored.
+
+Error codes added by Module 16 (same `error` envelope): `MODEL_UNAVAILABLE`
+(no checkpoint configured or file missing), `PREDICTION_FAILED` (unusable
+graph, invalid/incompatible model, inference failure, Neo4j unavailable,
+unexpected server error) and `NODE_NOT_FOUND` (requested node has no
+prediction). All errors are client-safe (no paths, tracebacks or credentials)
+and never terminate the connection. Within `PREDICTION_FAILED` the message
+distinguishes a Neo4j outage ("the graph database is currently unavailable")
+from a model/inference failure so infrastructure problems are never mistaken
+for model problems.
+
+#### Are 30/60/90-day horizons supported?
+
+**No.** The Module 14 pipeline returns exactly one raw scalar per graph node
+with no time dimension, so no horizon fields exist in the request or response
+contract. Module 16 never fabricates horizon values; horizon-aware prediction
+remains a future integration requirement and will be added behind this same
+transport when the model supports it.
+
+Behaviour / contract:
+
+* A validated `prediction_request` reuses the existing `PredictionService`
+  (shared process-wide singleton with the REST API — the model is loaded at
+  most once). No new model, no training and no downloads happen per request.
+* Inference is synchronous and blocking (Neo4j graph extraction + torch
+  forward pass), so it is executed through `run_in_threadpool` — the event
+  loop is never blocked by prediction work.
+* An invalid or failing prediction request returns a structured error and the
+  connection remains fully usable; other clients are never affected.
+* Consuming `connected`, `ping`/`pong`, `disconnect` and the REST predictions
+  API are unchanged by Module 16.
+
+Tests (mocked PredictionService — no Neo4j / checkpoint / GPU required):
+
+```bash
+cd backend
+python -m pytest tests/test_websocket.py tests/test_websocket_prediction.py -q
+```
+
+Real-checkpoint integration tests (real Module 13 checkpoint -> real
+`PredictionService` -> WebSocket `prediction_result`; only the Neo4j dataset
+builder is stubbed, exactly like `tests/test_prediction_service.py`):
+
+```bash
+cd backend
+python -m pytest tests/test_real_checkpoint_serving.py -q
+```
+
+#### Live smoke test (real checkpoint + real graph)
+
+With a trained checkpoint configured (see Module 14 "Training and deploying a
+checkpoint") and Neo4j running with at least one entity, verify the full
+WebSocket flow against a live server:
+
+```bash
+cd backend
+uvicorn app.main:app --port 8765        # terminal 1
+python _smoke_ws_client.py              # terminal 2
+```
+
+Expected: `CONNECT -> PING -> PREDICTION_REQUEST -> prediction_result (REAL
+model output) -> single-node result -> PING -> DISCONNECT` and
+`SMOKE TEST PASSED`. The client exits non-zero and prints the exact remediation
+when it instead receives:
+
+* `MODEL_UNAVAILABLE` — no checkpoint configured / file missing
+  (train one: `python scripts/train_gnn.py`, then set
+  `PREDICTION_CHECKPOINT_PATH`);
+* `PREDICTION_FAILED` + "graph database is currently unavailable" — Neo4j is
+  down (start it; seed demo data with `python scripts/seed_demo_graph.py` if
+  the graph is empty);
+* any other `PREDICTION_FAILED` — graph/model inference failure (check the
+  server logs).
+
 

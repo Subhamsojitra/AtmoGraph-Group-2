@@ -1,20 +1,23 @@
-"""Pydantic schemas for the Module 15 WebSocket transport.
+"""Pydantic schemas for the WebSocket transport (Modules 15 & 16).
 
 This module defines the minimal, stable wire contract used by the
-``/api/v1/ws`` WebSocket endpoint. Module 15 only implements connection
-lifecycle and the ``ping``/``pong`` handshake; the messages for the ML /
-ripple-prediction streaming pipeline (``prediction_request`` /
-``ripple_prediction``) are *reserved* here so Modules 16/17 can adopt them
-without changing the transport.
+``/api/v1/ws`` WebSocket endpoint.
+
+Module 15 implements the connection lifecycle and the ``ping``/``pong``
+handshake. Module 16 adds the ML prediction streaming messages
+(``prediction_request`` / ``prediction_result``) on top of that unchanged
+transport. ``ripple_prediction`` remains a *reserved* Module 17 message.
 
 Inbound (client -> server):
 
     {"type": "ping"}
+    {"type": "prediction_request", "data": {"node_id": ..., "relationship_types": [...]}}
 
 Outbound (server -> client):
 
     {"type": "connected", "data": {"client_id": ..., "protocol": ...}}
     {"type": "pong", "data": {"echo": ...}}
+    {"type": "prediction_result", "data": {... PredictionResponse ...}}
     {"type": "error", "error": {"code": ..., "message": ...}}
 
 Validation is strict on purpose: unknown top-level fields are rejected (rather
@@ -26,30 +29,34 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from app.schemas.prediction import PredictionRequest, PredictionResponse
 
 # --------------------------------------------------------------------------- #
-# Message type constants (Module 15 transport contract)
+# Message type constants (WebSocket transport contract)
 # --------------------------------------------------------------------------- #
 
 MESSAGE_TYPE_PING = "ping"
 MESSAGE_TYPE_CONNECTED = "connected"
 MESSAGE_TYPE_PONG = "pong"
 MESSAGE_TYPE_ERROR = "error"
+MESSAGE_TYPE_PREDICTION_REQUEST = "prediction_request"
+MESSAGE_TYPE_PREDICTION_RESULT = "prediction_result"
 
 #: Transport protocol version advertised in the ``connected`` message. Bump it
 #: whenever the wire contract changes incompatibly.
 PROTOCOL_VERSION = 1
 
-#: Client -> server message types handled by Module 15.
-SUPPORTED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset({MESSAGE_TYPE_PING})
-
-#: Message types reserved for the Module 16/17 ML streaming pipeline. They are
-#: recognized so the client receives a precise "not supported yet" error
-#: instead of a generic one, but they are NOT handled in Module 15.
-RESERVED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset(
-    {"prediction_request", "ripple_prediction"}
+#: Client -> server message types handled by the transport.
+SUPPORTED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset(
+    {MESSAGE_TYPE_PING, MESSAGE_TYPE_PREDICTION_REQUEST}
 )
+
+#: Message types reserved for the Module 17 ripple-effect streaming pipeline.
+#: They are recognized so the client receives a precise "not supported yet"
+#: error instead of a generic one, but they are NOT handled by Modules 15/16.
+RESERVED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset({"ripple_prediction"})
 
 # --------------------------------------------------------------------------- #
 # Structured error codes (stable, machine-readable)
@@ -60,6 +67,11 @@ ERROR_INVALID_MESSAGE = "INVALID_MESSAGE"
 ERROR_UNSUPPORTED_MESSAGE_TYPE = "UNSUPPORTED_MESSAGE_TYPE"
 ERROR_NOT_SUPPORTED_YET = "NOT_SUPPORTED_YET"
 ERROR_INTERNAL = "INTERNAL_ERROR"
+
+#: Module 16 prediction error codes (same ``error`` envelope, distinct codes).
+ERROR_MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+ERROR_PREDICTION_FAILED = "PREDICTION_FAILED"
+ERROR_NODE_NOT_FOUND = "NODE_NOT_FOUND"
 
 
 def _utc_now() -> datetime:
@@ -72,7 +84,7 @@ class InboundWebSocketMessage(BaseModel):
 
     Every inbound message must be a JSON object carrying a non-empty string
     ``type``. ``data`` is optional and reserved for module-specific payloads;
-    Module 15 accepts only the ``ping`` type (see
+    ``ping`` and ``prediction_request`` are handled by Modules 15/16 (see
     :data:`SUPPORTED_CLIENT_MESSAGE_TYPES`).
     """
 
@@ -98,6 +110,66 @@ class InboundWebSocketMessage(BaseModel):
         return stripped
 
 
+class WebSocketPredictionRequest(PredictionRequest):
+    """Prediction request payload for the ``prediction_request`` message.
+
+    Extends the Module 14 :class:`~app.schemas.prediction.PredictionRequest`
+    (which only knows ``relationship_types``) with an OPTIONAL ``node_id`` so a
+    client can ask for a single node's prediction. The pipeline itself remains
+    the existing whole-graph Module 14 inference; an optional ``node_id`` only
+    selects that node from the REAL model output.
+
+    Unlike the REST schema (which ignores unknown fields), this schema REJECTS
+    unknown fields so a typo such as the frontend-style ``nodeId`` cannot be
+    silently ignored — the client gets a precise ``INVALID_MESSAGE`` error
+    instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional graph node id whose prediction should be returned. "
+            "Omitted = predictions for every graph node (same as the REST API)."
+        ),
+    )
+
+    @field_validator("node_id")
+    @classmethod
+    def clean_node_id(cls, value: Optional[str]) -> Optional[str]:
+        """Trim ``node_id``; explicit blank/non-string values are rejected.
+
+        ``None`` (field omitted) means "predict for the whole graph".
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("node_id must be a string")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("node_id must not be blank")
+        return stripped
+
+
+def summarize_validation_error(exc: ValidationError) -> str:
+    """Turn a Pydantic :class:`ValidationError` into a short client-safe text.
+
+    Args:
+        exc: The validation error raised for an inbound message or payload.
+
+    Returns:
+        A one-line description of the first failing field.
+    """
+    errors = exc.errors()
+    if not errors:
+        return "Invalid message."
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc", ()))
+    reason = first.get("msg", "invalid value")
+    return f"Invalid field '{location}': {reason}." if location else reason
+
+
 class WebSocketErrorPayload(BaseModel):
     """Structured error attached to every ``error`` response."""
 
@@ -115,12 +187,13 @@ class OutboundWebSocketMessage(BaseModel):
     """Envelope for every message the server sends to a WebSocket client.
 
     ``error`` is only populated when ``type == "error"``; ``data`` carries
-    transport/module payloads for ``connected``/``pong`` messages.
+    transport/module payloads for ``connected``/``pong``/``prediction_result``
+    messages.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["connected", "pong", "error"]
+    type: Literal["connected", "pong", "error", "prediction_result"]
     timestamp: datetime = Field(default_factory=_utc_now)
     data: Optional[dict[str, Any]] = Field(
         default=None,
@@ -194,3 +267,40 @@ def build_error_message(code: str, message: str) -> dict[str, Any]:
         type=MESSAGE_TYPE_ERROR,
         error=WebSocketErrorPayload(code=code, message=message),
     ).model_dump(mode="json", exclude_none=True)
+
+
+def build_prediction_result_message(
+    response: PredictionResponse,
+    requested_node_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build the ``prediction_result`` envelope for a validated prediction.
+
+    The ``data`` payload IS the existing Module 14 :class:`PredictionResponse`
+    (``predictions`` / ``prediction_count`` / ``timestamp``), so the WebSocket
+    wire shape reuses the REST contract instead of inventing a parallel one.
+    Each entry exposes the graph ``node_id`` that the frontend maps to its
+    graph node id (``prediction.nodeId``).
+
+    When a single node was requested, its id is echoed as
+    ``data.requested_node_id`` so clients can correlate the response without
+    scanning the list.
+
+    Args:
+        response: A :class:`PredictionResponse` produced by the Module 14
+            service (or a single-node subset of it). Only real model output is
+            ever serialized — no values are invented here.
+        requested_node_id: The graph node id the client asked for, when a
+            single node was requested.
+
+    Returns:
+        A JSON-serializable ``prediction_result`` envelope.
+    """
+    payload: dict[str, Any] = {
+        "type": MESSAGE_TYPE_PREDICTION_RESULT,
+        "data": response.model_dump(mode="json"),
+    }
+    if requested_node_id is not None:
+        payload["data"]["requested_node_id"] = requested_node_id
+    return OutboundWebSocketMessage(**payload).model_dump(
+        mode="json", exclude_none=True
+    )

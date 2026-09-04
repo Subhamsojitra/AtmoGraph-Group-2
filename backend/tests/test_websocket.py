@@ -220,16 +220,15 @@ def test_extra_fields_are_rejected() -> None:
         assert error["error"]["code"] == ERROR_INVALID_MESSAGE
 
 
-@pytest.mark.parametrize(
-    "message_type", ["prediction_request", "ripple_prediction"]
-)
-def test_reserved_module_16_17_types_are_not_handled_yet(
-    message_type: str,
-) -> None:
-    """Module 15 recognizes future messages but does not run the ML pipeline."""
+def test_reserved_module_17_ripple_prediction_type_is_not_handled_yet() -> None:
+    """``ripple_prediction`` remains a Module 15/16 reserved future type.
+
+    Module 16 handles ``prediction_request``; only the Module 17 ripple-effect
+    streaming message is still answered with NOT_SUPPORTED_YET.
+    """
     with client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json({"type": message_type})
+        websocket.send_json({"type": "ripple_prediction"})
         error = websocket.receive_json()
         assert error["type"] == "error"
         assert error["error"]["code"] == ERROR_NOT_SUPPORTED_YET
@@ -269,6 +268,33 @@ def test_message_processor_rejects_non_object_payload() -> None:
 def test_message_processor_ping_returns_pong() -> None:
     response = create_response_for_message('{"type": "ping"}')
     assert response["type"] == "pong"
+
+
+def test_message_processor_valid_prediction_request_returns_validated_message() -> None:
+    """A structurally valid prediction_request yields the validated message.
+
+    The pure helper cannot run the blocking inference itself; it hands the
+    validated message back to the async route, which runs the (thread-pooled)
+    Module 14 pipeline.
+    """
+    result = create_response_for_message(
+        '{"type": "prediction_request", "data": {"node_id": "supplier-001"}}'
+    )
+    assert isinstance(result, InboundWebSocketMessage)
+    assert result.type == "prediction_request"
+
+
+def test_message_processor_invalid_prediction_payload_returns_error() -> None:
+    """An invalid prediction payload is rejected synchronously.
+
+    No ML code runs for a payload that fails validation locally.
+    """
+    response = create_response_for_message(
+        '{"type": "prediction_request", "data": {"node_id": 123}}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_MESSAGE
+    assert "node_id" in response["error"]["message"]
 
 
 def test_inbound_schema_rejects_blank_type() -> None:
