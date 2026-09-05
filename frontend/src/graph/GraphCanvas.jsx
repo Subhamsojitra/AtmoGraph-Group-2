@@ -275,7 +275,7 @@ const GraphCanvas = forwardRef(({
             .attr("y", 5)
             .style("font-family", "sans-serif")
             .style("font-size", "12px")
-            .style("fill", "#2d3748")
+            .style("fill", "#E7EDF3")
             .style("user-select", "none");
 
           return g;
@@ -517,10 +517,12 @@ const GraphCanvas = forwardRef(({
       className="graph-canvas-scaffold-boundary" 
       style={{ 
         width: '100%', 
-        height: '500px', 
-        border: '1px solid #e2e8f0', 
-        borderRadius: '6px', 
-        background: '#f7fafc', 
+        height: '100%', 
+        minHeight: '100%',
+        display: 'flex',
+        flex: 1,
+        border: 'none', 
+        background: 'transparent', 
         overflow: 'hidden',
         cursor: panActive ? 'grab' : 'default'
       }}

@@ -6,6 +6,41 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-05 — Day 27: Final Frontend Completion & Bug Fixing
+* **Work completed**:
+  - **Full-Screen Layout Fix**:
+    - Identified and fixed the root cause of lateral white margin strips on wide displays: eliminated Vite boilerplate constraints (`width: 1126px`, `margin: 0 auto`, `border-inline`) from `#root` in `index.css`.
+    - Configured `html`, `body`, and `#root` to span 100% width and height with dark theme background (`#0A0E13`) and `overflow-x: hidden`, ensuring the dashboard occupies the full viewport seamlessly without lateral white bars or horizontal overflow.
+  - **Graph Canvas Sizing & Utilization Improvement**:
+    - Removed hardcoded fixed height (`height: 500px`) and light container styling (`background: #f7fafc`, `border: 1px solid #e2e8f0`) from `GraphCanvas.jsx`.
+    - Configured `.graph-canvas-scaffold-boundary` and `.graph-canvas-wrapper` to fill 100% of available dashboard width and height with a transparent background.
+    - Updated node text label fill color to `#E7EDF3` for optimal contrast and legibility against the dark theme canvas.
+    - Verified D3 ResizeObserver and simulation center forces dynamically resize and center within the full available dashboard space without breaking zoom, pan, drag, or large-graph performance optimizations.
+  - **Functional Navigation & Placeholder Boundaries**:
+    - Investigated reported non-working sidebar navigation buttons (Disruption Alerts, Reports, Data Sources, Settings).
+    - Established active navigation state management (`activeNav` in `DashboardPage.jsx`) across desktop sidebar and mobile drawer.
+    - Built a modular `NavPlaceholderView` component aligned with the design tokens (`TOKENS.surface`, `TOKENS.border`, `TOKENS.brand`, `TOKENS.riskHigh`, `TOKENS.flow`) providing clear status badges ("Module In Progress", "Placeholder", "Integration Ready", "Preferences") and a one-click "Return to Network Map" action.
+    - Preserved underlying graph data, prediction state, and filters during navigation switching, ensuring seamless, non-breaking user experience without manufacturing fake backend data or APIs.
+  - **30/60/90-Day Timeline & Prediction State Status**:
+    - Inspected branch and commit history across all teammates: confirmed Yashaswini's visual timeline component has not yet landed in `main` or remote branches.
+    - In accordance with team boundaries, kept the existing horizon state (`selectedHorizon` in `DashboardPage.jsx`) and filtering architecture (`filterPredictionsByHorizon()` in `predictionService.js`) completely intact and integration-ready without duplicating her assigned UI scope.
+  - **WebSocket Integration & Prediction Boundary Readiness**:
+    - Verified payload-agnostic WebSocket transport (`websocketService.js`) and prediction service boundary (`predictionService.js`) remain fully stabilized.
+    - Confirmed `/api/v1/ws` connection cleanup works cleanly on unmount and mode switches without memory leaks or stale sockets.
+    - Verified graceful failure handling when backend or WebSocket is unavailable (no blank screen, no unhandled exceptions).
+  - **Comprehensive Multi-Mode Verification**:
+    - **Mock Mode (`?mode=mock`)**: Dashboard loads full-screen; D3 network graph renders; node selection, drag, zoom/pan/fit controls, search, filters, and node details panel work smoothly.
+    - **Backend Mode (`?mode=backend`)**: Gracefully attempts `/api/v1/graph/nodes` and `/api/v1/predictions` and connects to `/api/v1/ws`, cleanly handling connection errors without breaking UI.
+    - **Large Mode (`?mode=large`)**: Successfully renders ~2,000 nodes and ~3,000 links; full-screen responsive expansion; zoom, pan, drag, and selection perform fluidly.
+    - **Navigation Switching**: Verified seamless switching between "Network Map" and all placeholder views on both desktop and mobile drawer.
+  - **Strict Conflict-Safety & Team Boundaries**:
+    - Maintained zero changes to backend services (`backend/**`), Santanu's API routes, and Shivangi's GNN models.
+  - **Automated Validation Results**:
+    - Oxlint (`npm run lint`): 0 warnings, 0 errors across all frontend files.
+    - Vite build (`npm run build`): Successful production build (built in ~2.1s).
+* **Commit**: *[Ready for commit]*
+* **Issues/blockers**: Visible 30/60/90-day timeline UI control remains dependent on Yashaswini's pending frontend component; real-time GNN prediction streaming remains dependent on backend/ML team finalizing the GNN payload schema.
+
 ### 2026-09-04 — Day 26: Frontend Integration Hardening & Wrap-Up
 * **Work completed**:
   - **Frontend Integration Hardening & Stability Wrap-Up**:
