@@ -44,19 +44,30 @@ MESSAGE_TYPE_ERROR = "error"
 MESSAGE_TYPE_PREDICTION_REQUEST = "prediction_request"
 MESSAGE_TYPE_PREDICTION_RESULT = "prediction_result"
 
+#: Module 17 ripple-effect streaming message types.
+MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST = "ripple_prediction"
+MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED = "ripple_prediction_started"
+MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS = "ripple_prediction_progress"
+MESSAGE_TYPE_RIPPLE_DETECTED = "ripple_detected"
+MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT = "ripple_prediction_result"
+MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED = "ripple_prediction_completed"
+
 #: Transport protocol version advertised in the ``connected`` message. Bump it
 #: whenever the wire contract changes incompatibly.
 PROTOCOL_VERSION = 1
 
 #: Client -> server message types handled by the transport.
 SUPPORTED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset(
-    {MESSAGE_TYPE_PING, MESSAGE_TYPE_PREDICTION_REQUEST}
+    {
+        MESSAGE_TYPE_PING,
+        MESSAGE_TYPE_PREDICTION_REQUEST,
+        MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST,
+    }
 )
 
-#: Message types reserved for the Module 17 ripple-effect streaming pipeline.
-#: They are recognized so the client receives a precise "not supported yet"
-#: error instead of a generic one, but they are NOT handled by Modules 15/16.
-RESERVED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset({"ripple_prediction"})
+#: Message types reserved for future extensions (no longer used by Module 17).
+#: Kept for backward compatibility with clients that may check for reserved types.
+RESERVED_CLIENT_MESSAGE_TYPES: frozenset[str] = frozenset()
 
 # --------------------------------------------------------------------------- #
 # Structured error codes (stable, machine-readable)
@@ -152,6 +163,104 @@ class WebSocketPredictionRequest(PredictionRequest):
         return stripped
 
 
+class WebSocketRipplePredictionRequest(BaseModel):
+    """Request payload for the ``ripple_prediction`` message (Module 17).
+
+    Combines risk propagation parameters with GNN prediction to compute the
+    ripple effect of a source entity's disruption through the supply chain.
+    The source entity's risk score is propagated downstream using the existing
+    Module 10 risk propagation logic, and the GNN prediction is run for the
+    affected entities.
+
+    ``entity_id`` is the Module 8 ``node_id`` for a *matched* entity. A missing,
+    null, or blank value means the entity is unresolved, in which case the
+    service returns a controlled error and never reads the database.
+
+    ``risk_score`` is optional; when omitted, the entity's persisted risk score
+    from Module 9 is used. When provided, it must be within ``[0, 100]``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Resolved entity identifier (Module 8 node_id). Blank/null means "
+            "the entity is unresolved and no ripple prediction is possible."
+        ),
+    )
+    entity_name: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Resolved entity display name (Module 8 node_name)",
+    )
+    risk_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Risk score of the source entity on the 0-100 scale. When omitted, "
+            "the entity's persisted risk score from Module 9 is used."
+        ),
+    )
+    max_depth: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="Maximum traversal depth (hops). Defaults to the configured value.",
+    )
+    attenuation: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Per-hop attenuation factor applied to the source risk score. "
+            "Defaults to the configured value."
+        ),
+    )
+    relationship_types: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Optional relationship type filters to follow downstream. When "
+            "omitted, all outgoing relationship types are traversed."
+        ),
+    )
+
+    @field_validator("entity_id")
+    @classmethod
+    def normalize_entity_id(cls, value: Optional[str]) -> Optional[str]:
+        """Normalize ``entity_id``: whitespace-only values become ``None``."""
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("entity_name")
+    @classmethod
+    def normalize_entity_name(cls, value: Optional[str]) -> Optional[str]:
+        """Normalize ``entity_name``: whitespace-only values become ``None``."""
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("relationship_types")
+    @classmethod
+    def clean_relationship_types(
+        cls, value: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        """Drop blank entries and blank/whitespace-only relationship types."""
+        if value is None:
+            return None
+        cleaned = [
+            t.strip()
+            for t in value
+            if isinstance(t, str) and t.strip()
+        ]
+        return cleaned or None
+
+
 def summarize_validation_error(exc: ValidationError) -> str:
     """Turn a Pydantic :class:`ValidationError` into a short client-safe text.
 
@@ -193,7 +302,17 @@ class OutboundWebSocketMessage(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["connected", "pong", "error", "prediction_result"]
+    type: Literal[
+        "connected",
+        "pong",
+        "error",
+        "prediction_result",
+        "ripple_prediction_started",
+        "ripple_prediction_progress",
+        "ripple_detected",
+        "ripple_prediction_result",
+        "ripple_prediction_completed",
+    ]
     timestamp: datetime = Field(default_factory=_utc_now)
     data: Optional[dict[str, Any]] = Field(
         default=None,
@@ -304,3 +423,60 @@ def build_prediction_result_message(
     return OutboundWebSocketMessage(**payload).model_dump(
         mode="json", exclude_none=True
     )
+
+
+# --------------------------------------------------------------------------- #
+# Module 17: Ripple-effect prediction builders
+# --------------------------------------------------------------------------- #
+
+
+def build_ripple_started_message(
+    entity_id: str,
+    entity_name: Optional[str] = None,
+    risk_score: Optional[float] = None,
+) -> dict[str, Any]:
+    """Build the ``ripple_prediction_started`` message (Module 17).
+
+    Sent when a valid ripple prediction request is accepted and processing begins.
+
+    Args:
+        entity_id: The source entity identifier.
+        entity_name: The source entity display name (if available).
+        risk_score: The source risk score used for propagation (if available).
+
+    Returns:
+        A JSON-serializable ``ripple_prediction_started`` envelope.
+    """
+    data: dict[str, Any] = {"entity_id": entity_id}
+    if entity_name is not None:
+        data["entity_name"] = entity_name
+    if risk_score is not None:
+        data["risk_score"] = risk_score
+    return OutboundWebSocketMessage(
+        type=MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED, data=data
+    ).model_dump(mode="json", exclude_none=True)
+
+
+def build_ripple_progress_message(
+    stage: str,
+    message: str,
+    affected_count: Optional[int] = None,
+) -> dict[str, Any]:
+    """Build a ``ripple_prediction_progress`` message (Module 17).
+
+    Sent during processing to indicate actual progress stages.
+
+    Args:
+        stage: The current processing stage (e.g. "risk_propagation", "gnn_prediction").
+        message: A human-readable description of the current stage.
+        affected_count: Number of affected entities found so far (if applicable).
+
+    Returns:
+        A JSON-serializable ``ripple_prediction_progress`` envelope.
+    """
+    data: dict[str, Any] = {"stage": stage, "message": message}
+    if affected_count is not None:
+        data["affected_count"] = affected_count
+    return OutboundWebSocketMessage(
+        type=MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS, data=data
+    ).model_dump(mode="json", exclude_none=True)
