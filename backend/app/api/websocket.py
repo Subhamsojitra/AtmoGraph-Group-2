@@ -46,10 +46,12 @@ from app.schemas.websocket import (
     ERROR_UNSUPPORTED_MESSAGE_TYPE,
     MESSAGE_TYPE_PING,
     MESSAGE_TYPE_PREDICTION_REQUEST,
+    MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST,
     RESERVED_CLIENT_MESSAGE_TYPES,
     SUPPORTED_CLIENT_MESSAGE_TYPES,
     InboundWebSocketMessage,
     WebSocketPredictionRequest,
+    WebSocketRipplePredictionRequest,
     build_connected_message,
     build_error_message,
     build_pong_message,
@@ -127,6 +129,24 @@ def create_response_for_message(
                 ERROR_INVALID_MESSAGE, _summarize_validation_error(exc)
             )
         return message
+
+    # A ripple_prediction request is validated here (Module 17). The actual
+    # ripple-effect processing is not implemented yet, so a valid request is
+    # answered with NOT_SUPPORTED_YET; an invalid payload is rejected with a
+    # structured INVALID_MESSAGE error. This keeps the transport pure and
+    # synchronous while enforcing the Module 17 request contract.
+    if message.type == MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST:
+        try:
+            WebSocketRipplePredictionRequest(**(message.data or {}))
+        except (ValidationError, TypeError) as exc:
+            return build_error_message(
+                ERROR_INVALID_MESSAGE, _summarize_validation_error(exc)
+            )
+        return build_error_message(
+            ERROR_NOT_SUPPORTED_YET,
+            "Ripple prediction is recognized but the Module 17 "
+            "ripple-effect streaming pipeline is not implemented yet.",
+        )
 
     try:
         return dispatch_message(message)
