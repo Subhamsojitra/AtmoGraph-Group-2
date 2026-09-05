@@ -44,7 +44,7 @@ const TOKENS = {
 };
 
 const NAV_ITEMS = [
-  { icon: LayoutGrid, label: "Network Map", active: true },
+  { icon: LayoutGrid, label: "Network Map" },
   { icon: AlertTriangle, label: "Disruption Alerts" },
   { icon: FileText, label: "Reports" },
   { icon: Database, label: "Data Sources" },
@@ -212,31 +212,137 @@ function Header({ onMenuClick }) {
   );
 }
 
-function Sidebar({ mobileOpen, onClose }) {
+const NAV_CONFIG = {
+  "Disruption Alerts": {
+    icon: AlertTriangle,
+    badge: "Module In Progress",
+    badgeColor: TOKENS.riskHigh,
+    title: "Disruption Alerts",
+    description: "Real-time disruption alerting and ripple detection stream are currently undergoing backend integration. Supply chain monitoring is active on the Network Map."
+  },
+  "Reports": {
+    icon: FileText,
+    badge: "Placeholder",
+    badgeColor: TOKENS.brand,
+    title: "Supply Chain Reports",
+    description: "Automated vulnerability and historical risk report generation will be available once graph analytics contracts are finalized."
+  },
+  "Data Sources": {
+    icon: Database,
+    badge: "Integration Ready",
+    badgeColor: TOKENS.flow,
+    title: "Data Sources & Connectors",
+    description: "ERP connectors, customs databases, and logistics telemetry feeds will appear here. The active graph is currently fed via the configured dataset mode."
+  },
+  "Settings": {
+    icon: Settings,
+    badge: "Preferences",
+    badgeColor: TOKENS.textDim,
+    title: "System Settings",
+    description: "Configure prediction horizon parameters, WebSocket reconnect policies, graph visual thresholds, and alert notifications."
+  },
+};
+
+function NavPlaceholderView({ activeNav, onReturnToMap }) {
+  const config = NAV_CONFIG[activeNav] || {
+    icon: LayoutGrid,
+    badge: "Placeholder",
+    badgeColor: TOKENS.brand,
+    title: activeNav,
+    description: "This view is currently under development."
+  };
+  const Icon = config.icon;
+
+  return (
+    <div className="nav-placeholder-container">
+      <div 
+        className="nav-placeholder-card"
+        style={{ 
+          backgroundColor: TOKENS.surface,
+          border: `1px solid ${TOKENS.border}`
+        }}
+      >
+        <div 
+          className="nav-placeholder-icon-wrapper"
+          style={{ 
+            backgroundColor: `${config.badgeColor}15`,
+            border: `1px solid ${config.badgeColor}40`,
+            color: config.badgeColor
+          }}
+        >
+          <Icon size={26} />
+        </div>
+        <span 
+          className="nav-placeholder-badge"
+          style={{ 
+            backgroundColor: `${config.badgeColor}18`,
+            border: `1px solid ${config.badgeColor}40`,
+            color: config.badgeColor
+          }}
+        >
+          {config.badge}
+        </span>
+        <h2 className="nav-placeholder-title" style={{ color: TOKENS.text }}>
+          {config.title}
+        </h2>
+        <p className="nav-placeholder-desc" style={{ color: TOKENS.textDim }}>
+          {config.description}
+        </p>
+        <button
+          onClick={onReturnToMap}
+          className="nav-placeholder-btn"
+          style={{
+            backgroundColor: `${TOKENS.brand}20`,
+            color: TOKENS.brand,
+            border: `1px solid ${TOKENS.brand}60`
+          }}
+        >
+          <LayoutGrid size={15} />
+          Return to Network Map
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ activeNav = "Network Map", onNavChange, mobileOpen, onClose }) {
   const stats = [
     { icon: AlertTriangle, label: "Active disruptions", value: "3", color: TOKENS.riskHigh },
     { icon: Boxes, label: "Nodes at risk", value: "47", color: TOKENS.riskLow },
     { icon: Activity, label: "Nodes monitored", value: "6,204", color: TOKENS.flow },
   ];
 
+  const handleNavClick = (label) => {
+    if (onNavChange) {
+      onNavChange(label);
+    }
+    if (mobileOpen && onClose) {
+      onClose();
+    }
+  };
+
   const body = (
     <>
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.label}
-            className="nav-item"
-            style={{
-              backgroundColor: item.active ? `${TOKENS.brand}1A` : "transparent",
-              color: item.active ? TOKENS.text : TOKENS.textDim,
-              border: item.active ? `1px solid ${TOKENS.brand}40` : "1px solid transparent",
-            }}
-          >
-            <item.icon size={17} />
-            {item.label}
-            {item.active && <ChevronRight size={14} className="nav-item-chevron" />}
-          </button>
-        ))}
+        {NAV_ITEMS.map((item) => {
+          const isActive = activeNav === item.label;
+          return (
+            <button
+              key={item.label}
+              onClick={() => handleNavClick(item.label)}
+              className="nav-item"
+              style={{
+                backgroundColor: isActive ? `${TOKENS.brand}1A` : "transparent",
+                color: isActive ? TOKENS.text : TOKENS.textDim,
+                border: isActive ? `1px solid ${TOKENS.brand}40` : "1px solid transparent",
+              }}
+            >
+              <item.icon size={17} />
+              {item.label}
+              {isActive && <ChevronRight size={14} className="nav-item-chevron" />}
+            </button>
+          );
+        })}
       </nav>
 
       <div className="stats-section">
@@ -732,6 +838,7 @@ function NodeDetailsSheet({ node, onClose }) {
 }
 
 export default function DashboardPage() {
+  const [activeNav, setActiveNav] = useState("Network Map");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fontsReady, setFontsReady] = useState(false);
@@ -898,128 +1005,143 @@ export default function DashboardPage() {
       <Header onMenuClick={() => setMobileNavOpen(true)} />
 
       <div className="dashboard-body">
-        <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+        <Sidebar 
+          activeNav={activeNav}
+          onNavChange={setActiveNav}
+          mobileOpen={mobileNavOpen} 
+          onClose={() => setMobileNavOpen(false)} 
+        />
 
         <main className="main-content">
-          <ControlsBar
-            onSelectNode={setSelectedNode}
-            selectedNode={selectedNode}
-            onClearSelection={() => setSelectedNode(null)}
-            zoom={zoom}
-            panActive={panActive}
-            onPanActiveChange={setPanActive}
-            onZoomIn={handleZoomIn}
-            onZoomOut={handleZoomOut}
-            onResetZoom={handleResetZoom}
-          />
-          <div className="graph-canvas-wrapper" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-            {loading && (
-              <div
-                className="graph-loading-overlay"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: `1px solid ${TOKENS.border}`,
-                  borderRadius: '6px',
-                  background: TOKENS.surface,
-                  color: TOKENS.text,
-                  fontSize: '16px',
-                  zIndex: 10
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      border: `3px solid ${TOKENS.border}`,
-                      borderTop: `3px solid ${TOKENS.brand}`,
-                      borderRadius: '50%',
-                      animation: 'spin 1s linear infinite'
-                    }}
-                  />
-                  Loading graph data ({queryMode} mode)...
-                </div>
-                <style>{`
-                  @keyframes spin {
-                    0% { transform: rotate(0deg); }
-                    100% { transform: rotate(360deg); }
-                  }
-                `}</style>
-              </div>
-            )}
-
-            {error && (
-              <div 
-                className="graph-error-overlay"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px solid #feb2b2',
-                  borderRadius: '6px',
-                  background: 'rgba(254, 178, 178, 0.1)',
-                  color: '#c53030',
-                  padding: '20px',
-                  textAlign: 'center',
-                  zIndex: 10
-                }}
-              >
-                <div style={{ fontSize: '24px', marginBottom: '8px' }}>⚠️</div>
-                <div style={{ fontWeight: '600', marginBottom: '4px' }}>Failed to Load Graph ({queryMode} mode)</div>
-                <div style={{ fontSize: '14px' }}>{error}</div>
-              </div>
-            )}
-
-            {!loading && !error && data && (data.nodes.length === 0) && (
-              <div
-                className="graph-empty-overlay"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: `1px solid ${TOKENS.border}`,
-                  borderRadius: '6px',
-                  background: TOKENS.surface,
-                  color: TOKENS.text,
-                  padding: '20px',
-                  textAlign: 'center',
-                  zIndex: 10
-                }}
-              >
-                <div style={{ fontSize: '24px', marginBottom: '8px' }}>🔍</div>
-                <div style={{ fontWeight: '600', marginBottom: '4px' }}>No Graph Data Available ({queryMode} mode)</div>
-                <div style={{ fontSize: '14px' }}>The database query returned zero nodes or links.</div>
-              </div>
-            )}
-
-            {!loading && !error && data && data.nodes.length > 0 && (
-              <GraphCanvas 
-                ref={graphRef}
-                data={data} 
-                selectedNodeId={selectedNode?.id} 
-                onNodeClick={setSelectedNode} 
-                predictions={filteredPredictions}
-                onZoomLevelChange={setZoom}
+          {activeNav === "Network Map" ? (
+            <>
+              <ControlsBar
+                onSelectNode={setSelectedNode}
+                selectedNode={selectedNode}
+                onClearSelection={() => setSelectedNode(null)}
+                zoom={zoom}
                 panActive={panActive}
+                onPanActiveChange={setPanActive}
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onResetZoom={handleResetZoom}
               />
-            )}
-          </div>
+              <div className="graph-canvas-wrapper" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+                {loading && (
+                  <div
+                    className="graph-loading-overlay"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: `1px solid ${TOKENS.border}`,
+                      borderRadius: '6px',
+                      background: TOKENS.surface,
+                      color: TOKENS.text,
+                      fontSize: '16px',
+                      zIndex: 10
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          border: `3px solid ${TOKENS.border}`,
+                          borderTop: `3px solid ${TOKENS.brand}`,
+                          borderRadius: '50%',
+                          animation: 'spin 1s linear infinite'
+                        }}
+                      />
+                      Loading graph data ({queryMode} mode)...
+                    </div>
+                    <style>{`
+                      @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                      }
+                    `}</style>
+                  </div>
+                )}
+
+                {error && (
+                  <div 
+                    className="graph-error-overlay"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '1px solid #feb2b2',
+                      borderRadius: '6px',
+                      background: 'rgba(254, 178, 178, 0.1)',
+                      color: '#c53030',
+                      padding: '20px',
+                      textAlign: 'center',
+                      zIndex: 10
+                    }}
+                  >
+                    <div style={{ fontSize: '24px', marginBottom: '8px' }}>⚠️</div>
+                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>Failed to Load Graph ({queryMode} mode)</div>
+                    <div style={{ fontSize: '14px' }}>{error}</div>
+                  </div>
+                )}
+
+                {!loading && !error && data && (data.nodes.length === 0) && (
+                  <div
+                    className="graph-empty-overlay"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: `1px solid ${TOKENS.border}`,
+                      borderRadius: '6px',
+                      background: TOKENS.surface,
+                      color: TOKENS.text,
+                      padding: '20px',
+                      textAlign: 'center',
+                      zIndex: 10
+                    }}
+                  >
+                    <div style={{ fontSize: '24px', marginBottom: '8px' }}>🔍</div>
+                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>No Graph Data Available ({queryMode} mode)</div>
+                    <div style={{ fontSize: '14px' }}>The database query returned zero nodes or links.</div>
+                  </div>
+                )}
+
+                {!loading && !error && data && data.nodes.length > 0 && (
+                  <GraphCanvas 
+                    ref={graphRef}
+                    data={data} 
+                    selectedNodeId={selectedNode?.id} 
+                    onNodeClick={setSelectedNode} 
+                    predictions={filteredPredictions}
+                    onZoomLevelChange={setZoom}
+                    panActive={panActive}
+                  />
+                )}
+              </div>
+            </>
+          ) : (
+            <NavPlaceholderView activeNav={activeNav} onReturnToMap={() => setActiveNav("Network Map")} />
+          )}
         </main>
 
-        <NodeDetailsPanel node={selectedNodeWithLatestPrediction} />
+        {activeNav === "Network Map" && (
+          <NodeDetailsPanel node={selectedNodeWithLatestPrediction} />
+        )}
       </div>
 
-      <NodeDetailsSheet node={selectedNodeWithLatestPrediction} onClose={() => setSelectedNode(null)} />
+      {activeNav === "Network Map" && (
+        <NodeDetailsSheet node={selectedNodeWithLatestPrediction} onClose={() => setSelectedNode(null)} />
+      )}
     </div>
   );
 }
