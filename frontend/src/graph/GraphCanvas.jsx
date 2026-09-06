@@ -143,8 +143,9 @@ const GraphCanvas = forwardRef(({
       // Initialize ResizeObserver
       const resizeObserver = new ResizeObserver((entries) => {
         if (!entries || entries.length === 0) return;
-        const width = entries[0].contentRect.width || containerRef.current.clientWidth || 800;
-        const height = entries[0].contentRect.height || containerRef.current.clientHeight || 500;
+        const width = entries[0]?.contentRect?.width || containerRef.current?.clientWidth || 0;
+        const height = entries[0]?.contentRect?.height || containerRef.current?.clientHeight || 0;
+        if (width <= 0 || height <= 0) return;
 
         // Update SVG canvas bounds
         svg.attr("width", width).attr("height", height);

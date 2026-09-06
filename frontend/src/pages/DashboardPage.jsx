@@ -967,7 +967,11 @@ export default function DashboardPage() {
     `;
     document.head.appendChild(link);
     setFontsReady(true);
-    return () => document.head.removeChild(link);
+    return () => {
+      if (document.head.contains(link)) {
+        document.head.removeChild(link);
+      }
+    };
   }, []);
 
   useEffect(() => {
