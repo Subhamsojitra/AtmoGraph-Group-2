@@ -39,10 +39,17 @@ __all__ = [
     "RipplePredictionError",
     "RipplePredictionService",
 ]
-
-
 class RipplePredictionService:
-    """Compute the ripple effect of a source entity's risk (Module 17)."""
+    """Compute the ripple effect of a source entity's risk (Module 17).
+
+    Accepts a validated WebSocketRipplePredictionRequest, resolves the source
+    entity through the existing graph layer, propagates its risk downstream
+    using the existing Module 10 engine, and enriches the affected entities
+    with real GNN predictions from the existing Module 14 pipeline.
+
+    External callers (the future WebSocket layer) use this service. It never
+    touches a WebSocket and never invents data.
+    """
 
     def __init__(
         self,
@@ -55,14 +62,39 @@ class RipplePredictionService:
             risk_propagation_service or RiskPropagationService()
         )
         self._prediction_service = prediction_service or PredictionService()
-
-    def predict(
+def predict(
         self, request: WebSocketRipplePredictionRequest
     ) -> RipplePredictionResult:
-        """Compute the ripple prediction for a source entity."""
+        """Compute the ripple prediction for a source entity.
+
+        Args:
+            request: A validated WebSocketRipplePredictionRequest carrying at
+                least the source entity_id.
+
+        Returns:
+            A structured RipplePredictionResult containing the affected
+            entities (from the real Module 10 propagation) enriched with
+            real GNN predictions (from the real Module 14 pipeline).
+
+        Raises:
+            EntityNotFoundError: The source entity does not exist.
+            ServiceUnavailable: Neo4j is unreachable.
+            ModelNotAvailableError: No trained GNN checkpoint configured.
+            GNNPredictionError: GNN inference fails.
+            RipplePredictionError: Unexpected internal failure.
+        """
         entity_id = request.entity_id
+
+        # 1. Resolve the source entity BEFORE propagation so an unknown
+        #    entity fails fast with a precise, typed error.
         node = self._resolve_entity(entity_id)
+
+        # 2. Determine the risk score: request-supplied wins; when omitted,
+        #    the entity's persisted risk score from Module 9 is used.
         risk_score = self._resolve_risk_score(request, node)
+
+        # 3. Build a Module 10 risk propagation request and run the existing
+        #    propagation engine.
         risk_request = RiskPropagationRequest(
             entity_id=entity_id,
             entity_name=request.entity_name,
@@ -72,8 +104,14 @@ class RipplePredictionService:
             relationship_types=request.relationship_types,
         )
         propagation = self._run_propagation(risk_request)
+
+        # 4. Run the existing Module 14 GNN prediction for the current graph.
         predictions = self._run_prediction(request)
+
+        # 5. Enrich affected entities with real GNN predictions and build the
+        #    structured result.
         result = self._build_result(propagation, predictions)
+
         logger.info(
             "Ripple prediction computed",
             extra={
@@ -84,8 +122,7 @@ class RipplePredictionService:
             },
         )
         return result
-
-    def _resolve_entity(self, entity_id: str) -> object:
+def _resolve_entity(self, entity_id: str) -> object:
         """Resolve the source entity node, raising if it does not exist."""
         try:
             node = self._graph_service.get_node_by_id(entity_id)
@@ -120,3 +157,51 @@ class RipplePredictionService:
                 f"Entity '{entity_id}' not found in the graph"
             )
         return node
+def _resolve_risk_score(
+        self,
+        request: WebSocketRipplePredictionRequest,
+        node: object,
+    ) -> float:
+        """Determine the source risk score.
+
+        Prefers the request-supplied score. When omitted, falls back to the
+        entity's persisted risk_score property. If neither is available,
+        defaults to 0.0 (LOW) — never invents a non-zero risk.
+        """
+        if request.risk_score is not None:
+            return float(request.risk_score)
+
+        persisted = self._extract_persisted_risk_score(node)
+        if persisted is not None:
+            return persisted
+
+        logger.info(
+            "Ripple prediction: no risk score provided or persisted; "
+            "defaulting to 0.0",
+            extra={"entity_id": request.entity_id},
+        )
+        return 0.0
+
+    @staticmethod
+    def _extract_persisted_risk_score(node: object) -> Optional[float]:
+        """Extract the persisted risk_score from a graph node response."""
+        properties: Optional[dict] = None
+
+        if hasattr(node, "properties"):
+            candidate = getattr(node, "properties", None)
+            if isinstance(candidate, dict):
+                properties = candidate
+        elif isinstance(node, dict):
+            candidate = node.get("properties")
+            if isinstance(candidate, dict):
+                properties = candidate
+            elif "risk_score" in node:
+                properties = node
+
+        if not properties:
+            return None
+
+        raw = properties.get("risk_score")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw)
+        return None
