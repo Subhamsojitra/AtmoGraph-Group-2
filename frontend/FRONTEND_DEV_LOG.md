@@ -6,6 +6,42 @@ This shared development log is used by the frontend team (Shubham and Yashaswini
 
 ## Shubham
 
+### 2026-09-06 — Day 28: Final Frontend Stabilization & Demo Readiness
+* **Work completed**:
+  - **Final Frontend Stabilization & Demo Readiness**:
+    - Finalized the AtmoGraph frontend on the `Shubham` branch for comprehensive demo readiness on the final scheduled project day.
+    - Verified that all currently supported frontend functionality is rock-solid, decoupled, and error-free across all operation modes (`?mode=mock`, `?mode=backend`, `?mode=large`).
+  - **Full-Screen Viewport & Responsive Layout Hardening**:
+    - Confirmed full viewport utilization: zero lateral white strips, no horizontal scrollbars, and no fixed-width container clipping.
+    - Hardened `.app-shell` styling in `DashboardPage.css` with `height: 100dvh` alongside `100vh` fallback for dynamic viewport support on modern mobile browsers.
+    - Verified responsive behavior across desktop displays, tablets, and mobile screens (including mobile navigation drawer and slide-up node details sheet).
+  - **D3 Graph Canvas Sizing & Simulation Stability**:
+    - Verified SVG and canvas scaffold fill 100% of available dashboard width and height.
+    - Hardened `ResizeObserver` in `GraphCanvas.jsx` with defensive zero-dimension guards (`width <= 0 || height <= 0`) to safeguard D3 simulation center force calculations during layout transitions or hidden container states.
+    - Verified interactive D3 capabilities: node dragging, selection outlines, hover brightening, background pan/zoom, and imperative Fit/Reset controls remain fluid and responsive.
+  - **Functional Navigation & Boundary Placeholders**:
+    - Verified interactive navigation across all menu items: Network Map, Disruption Alerts, Reports, Data Sources, and Settings.
+    - Confirmed non-map sections cleanly render `NavPlaceholderView` with contextual status badges and a "Return to Network Map" action without fabricating mock alerts, reports, or backend connectors.
+  - **Prediction & Horizon Architecture Readiness**:
+    - Preserved prediction architecture pipeline: `prediction source -> predictionService -> horizon filtering -> DashboardPage -> GraphCanvas`.
+    - Maintained `selectedHorizon` state (`current`, `30`, `60`, `90`) and `filterPredictionsByHorizon()` filtering pipeline, with dynamic risk overlay classes and node details synchronization.
+    - Verified team boundary: confirmed Yashaswini's visual timeline component has not landed in branch/main and preserved the horizon state boundary for direct wiring when available.
+  - **WebSocket Transport Readiness (/api/v1/ws)**:
+    - Verified lifecycle-safe, payload-agnostic WebSocket transport layer (`websocketService.js` and `connectPredictionStream` in `predictionService.js`).
+    - Handled connection lifecycle, ping/pong keepalive, structured server errors, and clean unmount/mode-switch disconnections gracefully without socket leaks.
+    - Preserved strict boundary: avoided hardcoding or inventing speculative GNN prediction payloads (`ripple_prediction`).
+  - **Large-Graph Mode Scalability Verification (`?mode=large`)**:
+    - Verified rendering and interaction performance with ~2,000 nodes and ~3,000 links: simulation pre-ticking (40 ticks), collision-force bypass, Barnes-Hut charge calculation limits, and text label suppression maintain high interactivity (~60 FPS) without freezing.
+  - **Strict Scope Boundaries & Decoupling**:
+    - Maintained zero changes to `backend/**`, Santanu's API services, Shivangi's PyTorch ML/GNN models, and Yashaswini's timeline UI.
+  - **Current Limitations**:
+    - Real-time GNN prediction streaming and dynamic risk propagation remain dependent on the ML/backend team completing and deploying the final GNN inference pipeline and WebSocket dispatcher.
+  - **Automated Validation Results**:
+    - Oxlint (`npm run lint`): 0 warnings, 0 errors.
+    - Vite build (`npm run build`): Clean production bundle compilation (built in ~2.2s).
+* **Commit**: *[Ready for final review]*
+* **Issues/blockers**: Real-time GNN predictions depend on backend/ML GNN model readiness.
+
 ### 2026-09-05 — Day 27: Final Frontend Completion & Bug Fixing
 * **Work completed**:
   - **Full-Screen Layout Fix**:
