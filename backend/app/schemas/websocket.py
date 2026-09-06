@@ -172,9 +172,11 @@ class WebSocketRipplePredictionRequest(BaseModel):
     Module 10 risk propagation logic, and the GNN prediction is run for the
     affected entities.
 
-    ``entity_id`` is the Module 8 ``node_id`` for a *matched* entity. A missing,
-    null, or blank value means the entity is unresolved, in which case the
-    service returns a controlled error and never reads the database.
+    ``entity_id`` is REQUIRED: it is the Module 8 ``node_id`` for a *matched*
+    entity and is the minimum information the backend needs to identify the
+    source of a ripple prediction. A missing, null, or blank value fails
+    validation, so the service never reads the database for an unresolved
+    entity.
 
     ``risk_score`` is optional; when omitted, the entity's persisted risk score
     from Module 9 is used. When provided, it must be within ``[0, 100]``.
@@ -182,12 +184,11 @@ class WebSocketRipplePredictionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    entity_id: Optional[str] = Field(
-        default=None,
+    entity_id: str = Field(
         max_length=200,
         description=(
-            "Resolved entity identifier (Module 8 node_id). Blank/null means "
-            "the entity is unresolved and no ripple prediction is possible."
+            "Resolved entity identifier (Module 8 node_id). This is the minimum "
+            "information required to identify the source of a ripple prediction."
         ),
     )
     entity_name: Optional[str] = Field(
@@ -229,12 +230,12 @@ class WebSocketRipplePredictionRequest(BaseModel):
 
     @field_validator("entity_id")
     @classmethod
-    def normalize_entity_id(cls, value: Optional[str]) -> Optional[str]:
-        """Normalize ``entity_id``: whitespace-only values become ``None``."""
-        if value is None:
-            return None
+    def normalize_entity_id(cls, value: str) -> str:
+        """Trim ``entity_id``; blank/whitespace-only values are rejected."""
         stripped = value.strip()
-        return stripped or None
+        if not stripped:
+            raise ValueError("entity_id must not be blank")
+        return stripped
 
     @field_validator("entity_name")
     @classmethod

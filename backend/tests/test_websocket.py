@@ -41,6 +41,7 @@ from app.schemas.websocket import (  # noqa: E402
     ERROR_NOT_SUPPORTED_YET,
     ERROR_UNSUPPORTED_MESSAGE_TYPE,
     InboundWebSocketMessage,
+    WebSocketRipplePredictionRequest,
     build_error_message,
 )
 from app.services.websocket_manager import (  # noqa: E402
@@ -221,14 +222,18 @@ def test_extra_fields_are_rejected() -> None:
 
 
 def test_reserved_module_17_ripple_prediction_type_is_not_handled_yet() -> None:
-    """``ripple_prediction`` remains a Module 15/16 reserved future type.
+    """A valid ``ripple_prediction`` request is recognized but not processed.
 
-    Module 16 handles ``prediction_request``; only the Module 17 ripple-effect
-    streaming message is still answered with NOT_SUPPORTED_YET.
+    The transport validates the Module 17 request schema (so an invalid
+    payload is rejected with INVALID_MESSAGE) but the actual ripple-effect
+    streaming pipeline is not implemented yet, so a *valid* request is
+    answered with NOT_SUPPORTED_YET.
     """
     with client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json({"type": "ripple_prediction"})
+        websocket.send_json(
+            {"type": "ripple_prediction", "data": {"entity_id": "supplier-001"}}
+        )
         error = websocket.receive_json()
         assert error["type"] == "error"
         assert error["error"]["code"] == ERROR_NOT_SUPPORTED_YET
@@ -295,6 +300,123 @@ def test_message_processor_invalid_prediction_payload_returns_error() -> None:
     assert response["type"] == "error"
     assert response["error"]["code"] == ERROR_INVALID_MESSAGE
     assert "node_id" in response["error"]["message"]
+
+
+# --------------------------------------------------------------------------- #
+# Module 17: Ripple prediction request schema validation (pure helpers)
+# --------------------------------------------------------------------------- #
+
+
+def test_valid_ripple_prediction_request_returns_not_supported_yet() -> None:
+    """A valid ripple_prediction payload is schema-valid but not processed.
+
+    The pure helper validates the Module 17 request contract and answers with
+    NOT_SUPPORTED_YET (the actual ripple pipeline is a later Module 17 step).
+    """
+    response = create_response_for_message(
+        '{"type": "ripple_prediction", "data": {"entity_id": "supplier-001"}}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_NOT_SUPPORTED_YET
+    assert "stack" not in response["error"]["message"].lower()
+
+
+def test_ripple_prediction_missing_entity_id_returns_invalid_message() -> None:
+    """A ripple_prediction with NO data payload is rejected (entity_id required)."""
+    response = create_response_for_message(
+        '{"type": "ripple_prediction"}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_MESSAGE
+    assert "entity_id" in response["error"]["message"]
+
+
+def test_ripple_prediction_empty_entity_id_returns_invalid_message() -> None:
+    """A blank/whitespace-only entity_id is rejected by the schema."""
+    response = create_response_for_message(
+        '{"type": "ripple_prediction", "data": {"entity_id": "   "}}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_MESSAGE
+    assert "entity_id" in response["error"]["message"]
+
+
+def test_ripple_prediction_invalid_entity_id_type_returns_invalid_message() -> None:
+    """A non-string entity_id is rejected by the schema."""
+    response = create_response_for_message(
+        '{"type": "ripple_prediction", "data": {"entity_id": 123}}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_MESSAGE
+    assert "entity_id" in response["error"]["message"]
+
+
+def test_ripple_prediction_malformed_json_returns_invalid_json() -> None:
+    """Unparseable JSON is rejected with INVALID_JSON, not a schema error."""
+    response = create_response_for_message("{not json")
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_JSON
+
+
+def test_ripple_prediction_rejects_unknown_fields() -> None:
+    """Unknown fields in the ripple payload are rejected (strict contract)."""
+    response = create_response_for_message(
+        '{"type": "ripple_prediction", "data": {"entity_id": "supplier-001", "extra": true}}'
+    )
+    assert response["type"] == "error"
+    assert response["error"]["code"] == ERROR_INVALID_MESSAGE
+
+
+def test_ripple_prediction_schema_accepts_optional_fields() -> None:
+    """Optional ripple parameters are accepted when well-formed."""
+    request = WebSocketRipplePredictionRequest(
+        entity_id="supplier-001",
+        entity_name="Supplier One",
+        risk_score=75.5,
+        max_depth=5,
+        attenuation=0.8,
+        relationship_types=["SUPPLIES"],
+    )
+    assert request.entity_id == "supplier-001"
+    assert request.entity_name == "Supplier One"
+    assert request.risk_score == 75.5
+    assert request.max_depth == 5
+    assert request.attenuation == 0.8
+    assert request.relationship_types == ["SUPPLIES"]
+
+
+def test_ripple_prediction_schema_rejects_risk_score_out_of_range() -> None:
+    """risk_score outside [0, 100] is rejected by the schema."""
+    with pytest.raises(ValidationError):
+        WebSocketRipplePredictionRequest(
+            entity_id="supplier-001", risk_score=150.0
+        )
+
+
+def test_ripple_prediction_schema_model_dump_is_json_safe() -> None:
+    """The schema serializes to a JSON-safe dict (no internal types)."""
+    request = WebSocketRipplePredictionRequest(entity_id="supplier-001")
+    dumped = request.model_dump(mode="json", exclude_none=True)
+    assert dumped == {"entity_id": "supplier-001"}
+    assert isinstance(dumped["entity_id"], str)
+
+
+def test_prediction_request_validation_unaffected_by_ripple_schema() -> None:
+    """Adding the ripple schema does not change prediction_request handling.
+
+    Regression guard: prediction_request validation behavior is unchanged.
+    """
+    valid = create_response_for_message(
+        '{"type": "prediction_request", "data": {"node_id": "supplier-001"}}'
+    )
+    assert isinstance(valid, InboundWebSocketMessage)
+    assert valid.type == "prediction_request"
+
+    invalid = create_response_for_message(
+        '{"type": "prediction_request", "data": {"node_id": 123}}'
+    )
+    assert invalid["type"] == "error"
+    assert invalid["error"]["code"] == ERROR_INVALID_MESSAGE
 
 
 def test_inbound_schema_rejects_blank_type() -> None:
