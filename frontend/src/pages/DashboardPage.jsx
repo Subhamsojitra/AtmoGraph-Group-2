@@ -858,8 +858,6 @@ export default function DashboardPage() {
 
   // Prediction states for future integration
   const [predictions, setPredictions] = useState([]);
-  const [_predictionsLoading, setPredictionsLoading] = useState(false);
-  const [_predictionsError, setPredictionsError] = useState(null);
 
   // Prediction horizon state ('current', '30', '60', '90')
   // Timeline UI can update selectedHorizon through this state boundary.
@@ -896,8 +894,6 @@ export default function DashboardPage() {
     setData(null);
     setSelectedNode(null);
     setPredictions([]);
-    setPredictionsLoading(true);
-    setPredictionsError(null);
 
     getGraphData(queryMode)
       .then((res) => {
@@ -915,13 +911,10 @@ export default function DashboardPage() {
       .then((res) => {
         if (!active) return;
         setPredictions(res?.predictions || []);
-        setPredictionsLoading(false);
       })
       .catch((err) => {
         if (!active) return;
         console.warn("Failed to load predictions:", err);
-        setPredictionsError(err.message || 'An error occurred while loading predictions.');
-        setPredictionsLoading(false);
       });
 
     return () => {
