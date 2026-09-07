@@ -89,12 +89,13 @@ def make_propagation_response(
     source_entity_name: str = "Source Entity",
     source_risk_score: float = 75.0,
     affected_entities: Optional[list[AffectedEntity]] = None,
+    affected_count: Optional[int] = None,
     max_depth_reached: int = 2,
     propagated: bool = True,
     error: Optional[str] = None,
 ) -> RiskPropagationResponse:
     """Build a Module 10 RiskPropagationResponse."""
-    affected = affected_entities or [
+    affected = affected_entities if affected_entities is not None else [
         make_affected_entity("DST_001", "Downstream A", depth=1, risk_score=50.0, risk_level="MEDIUM"),
         make_affected_entity("DST_002", "Downstream B", depth=2, risk_score=25.0, risk_level="LOW"),
     ]
@@ -103,7 +104,7 @@ def make_propagation_response(
         source_entity_name=source_entity_name,
         source_risk_score=source_risk_score,
         affected_entities=affected,
-        affected_count=len(affected),
+        affected_count=affected_count if affected_count is not None else len(affected),
         max_depth_reached=max_depth_reached,
         propagated=propagated,
         error=error,

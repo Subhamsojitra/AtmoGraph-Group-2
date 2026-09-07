@@ -32,6 +32,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.schemas.prediction import PredictionRequest, PredictionResponse
+from app.services.ripple_prediction.result_schema import RipplePredictionResult
 
 # --------------------------------------------------------------------------- #
 # Message type constants (WebSocket transport contract)
@@ -480,4 +481,28 @@ def build_ripple_progress_message(
         data["affected_count"] = affected_count
     return OutboundWebSocketMessage(
         type=MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS, data=data
+    ).model_dump(mode="json", exclude_none=True)
+
+
+
+def build_ripple_prediction_result_message(
+    result: RipplePredictionResult,
+) -> dict[str, Any]:
+    """Build the ``ripple_prediction_result`` envelope (Module 17).
+
+    The ``data`` payload IS the structured :class:`RipplePredictionResult`
+    produced by :class:`RipplePredictionService`: the real Module 10
+    propagation data enriched with real Module 14 GNN predictions. Nothing is
+    invented here — only the service's actual output is serialized.
+
+    Args:
+        result: A :class:`RipplePredictionResult` produced by
+            :class:`RipplePredictionService`.
+
+    Returns:
+        A JSON-serializable ``ripple_prediction_result`` envelope.
+    """
+    return OutboundWebSocketMessage(
+        type=MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT,
+        data=result.model_dump(mode="json"),
     ).model_dump(mode="json", exclude_none=True)

@@ -221,13 +221,13 @@ def test_extra_fields_are_rejected() -> None:
         assert error["error"]["code"] == ERROR_INVALID_MESSAGE
 
 
-def test_reserved_module_17_ripple_prediction_type_is_not_handled_yet() -> None:
-    """A valid ``ripple_prediction`` request is recognized but not processed.
+def test_valid_ripple_prediction_request_is_dispatched() -> None:
+    """A valid ``ripple_prediction`` request is dispatched to the service.
 
-    The transport validates the Module 17 request schema (so an invalid
-    payload is rejected with INVALID_MESSAGE) but the actual ripple-effect
-    streaming pipeline is not implemented yet, so a *valid* request is
-    answered with NOT_SUPPORTED_YET.
+    The transport validates the Module 17 request schema and dispatches a valid
+    request to the ripple prediction service. Without a live Neo4j the service
+    fails with a structured error (never a stack trace), and the connection
+    stays alive.
     """
     with client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
@@ -236,7 +236,9 @@ def test_reserved_module_17_ripple_prediction_type_is_not_handled_yet() -> None:
         )
         error = websocket.receive_json()
         assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_NOT_SUPPORTED_YET
+        assert error["error"]["code"] != ERROR_NOT_SUPPORTED_YET
+        assert "stack" not in error["error"]["message"].lower()
+        assert "traceback" not in error["error"]["message"].lower()
 
 
 def test_disconnect_of_one_client_does_not_break_another() -> None:
@@ -307,18 +309,19 @@ def test_message_processor_invalid_prediction_payload_returns_error() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_valid_ripple_prediction_request_returns_not_supported_yet() -> None:
-    """A valid ripple_prediction payload is schema-valid but not processed.
+def test_valid_ripple_prediction_request_returns_validated_message() -> None:
+    """A valid ripple_prediction payload is returned as a validated message.
 
-    The pure helper validates the Module 17 request contract and answers with
-    NOT_SUPPORTED_YET (the actual ripple pipeline is a later Module 17 step).
+    The pure helper validates the Module 17 request contract and returns the
+    validated InboundWebSocketMessage so the route can dispatch it to the
+    ripple prediction service asynchronously.
     """
     response = create_response_for_message(
         '{"type": "ripple_prediction", "data": {"entity_id": "supplier-001"}}'
     )
-    assert response["type"] == "error"
-    assert response["error"]["code"] == ERROR_NOT_SUPPORTED_YET
-    assert "stack" not in response["error"]["message"].lower()
+    assert isinstance(response, InboundWebSocketMessage)
+    assert response.type == "ripple_prediction"
+    assert response.data == {"entity_id": "supplier-001"}
 
 
 def test_ripple_prediction_missing_entity_id_returns_invalid_message() -> None:
