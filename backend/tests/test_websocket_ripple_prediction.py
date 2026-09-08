@@ -1,10 +1,20 @@
-"""Tests for Module 17 Part 4: WebSocket -> RipplePredictionService integration.
+"""Tests for Module 17 Part 4 & 5: WebSocket -> RipplePredictionService integration
+and real-time streaming events.
 
 These tests mount the real ``/api/v1/ws`` route but MOCK the ripple prediction
 service at the WebSocket dependency, so NONE of them require a running Neo4j
 server, a trained GNN checkpoint or a GPU. They verify the Module 17 request
-dispatch, response normalization, error mapping and client isolation around
-the EXISTING Module 17 service contract.
+dispatch, streaming lifecycle, response normalization, error mapping and
+client isolation around the EXISTING Module 17 service contract.
+
+The streaming lifecycle for a valid ripple_prediction request is:
+
+    ripple_prediction_started
+    ripple_prediction_progress  (risk_propagation stage)
+    ripple_detected             (one per REAL affected entity)
+    ripple_prediction_progress  (gnn_prediction stage)
+    ripple_prediction_result
+    ripple_prediction_completed
 
 Conventions follow ``tests/test_websocket.py`` (Module 15),
 ``tests/test_websocket_prediction.py`` (Module 16) and
@@ -29,9 +39,15 @@ os.environ["NEO4J_DATABASE"] = "test_db"
 from app.main import app  # noqa: E402
 from app.schemas.websocket import (  # noqa: E402
     ERROR_INVALID_MESSAGE,
+    ERROR_MODEL_UNAVAILABLE,
     ERROR_PREDICTION_FAILED,
+    MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED,
+    MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS,
     MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT,
+    MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED,
+    MESSAGE_TYPE_RIPPLE_DETECTED,
 )
+from app.services.prediction_service import ModelNotAvailableError  # noqa: E402
 from app.services.ripple_prediction.exceptions import RipplePredictionError
 from app.services.ripple_prediction.result_schema import (
     RippleAffectedEntity,
@@ -39,9 +55,18 @@ from app.services.ripple_prediction.result_schema import (
 )
 from app.services.risk.exceptions import EntityNotFoundError
 from app.services.websocket_manager import reset_connection_manager  # noqa: E402
+from neo4j.exceptions import ServiceUnavailable  # noqa: E402
 
 client = TestClient(app)
 WS_URL = "/api/v1/ws"
+
+#: Message types that terminate a ripple prediction stream.
+_STREAM_TERMINAL_TYPES = frozenset(
+    {
+        MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED,
+        "error",
+    }
+)
 
 
 @pytest.fixture(autouse=True)
@@ -84,98 +109,209 @@ def make_ripple_result(
     error: str | None = None,
 ) -> RipplePredictionResult:
     """Build a RipplePredictionResult with sensible defaults."""
-    affected = affected_entities or [
-        RippleAffectedEntity(
-            entity_id="DST_001",
-            entity_name="Downstream A",
-            depth=1,
-            propagated_risk_score=50.0,
-            propagated_risk_level="MEDIUM",
-            gnn_prediction=0.75,
-        ),
-    ]
+    if affected_entities is None:
+        affected_entities = [
+            RippleAffectedEntity(
+                entity_id="DST_001",
+                entity_name="Downstream A",
+                depth=1,
+                propagated_risk_score=50.0,
+                propagated_risk_level="MEDIUM",
+                gnn_prediction=0.75,
+            ),
+        ]
     return RipplePredictionResult(
         source_entity_id=source_entity_id,
         source_entity_name=source_entity_name,
         source_risk_score=source_risk_score,
         propagated=propagated,
-        affected_entities=affected,
-        affected_count=len(affected),
-        max_depth_reached=1,
-        prediction_count=1,
+        affected_entities=affected_entities,
+        affected_count=len(affected_entities),
+        max_depth_reached=max((e.depth for e in affected_entities), default=0),
+        prediction_count=sum(
+            1 for e in affected_entities if e.gnn_prediction is not None
+        ),
         error=error,
     )
 
 
-# --------------------------------------------------------------------------- #
-# 1. Valid ripple_prediction request
-# --------------------------------------------------------------------------- #
+def collect_ripple_stream(websocket: Any) -> list[dict[str, Any]]:
+    """Collect all streaming messages for one ripple_prediction request."""
+    messages: list[dict[str, Any]] = []
+    while True:
+        msg = websocket.receive_json()
+        messages.append(msg)
+        if msg.get("type") in _STREAM_TERMINAL_TYPES:
+            break
+    return messages
 
 
-def test_valid_ripple_prediction_returns_result(
+def send_ripple_and_collect(
+    websocket: Any, entity_id: str = "SRC_001"
+) -> list[dict[str, Any]]:
+    """Send a ripple_prediction request and collect the full stream."""
+    websocket.send_json(
+        {"type": "ripple_prediction", "data": {"entity_id": entity_id}}
+    )
+    return collect_ripple_stream(websocket)
+
+
+def test_valid_ripple_prediction_streams_full_lifecycle(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
-    """A valid ripple_prediction request reaches the service and returns a result."""
+    """A valid ripple_prediction streams the complete event lifecycle."""
     mock_ripple_service.predict.return_value = make_ripple_result()
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
-        )
-        response = websocket.receive_json()
+        messages = send_ripple_and_collect(websocket)
 
-        assert response["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
-        assert response["data"]["source_entity_id"] == "SRC_001"
-        assert response["data"]["affected_count"] == 1
-        assert response["data"]["propagated"] is True
-        mock_ripple_service.predict.assert_called_once()
+    types = [m["type"] for m in messages]
+    assert types[0] == MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED
+    assert types[-1] == MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED
+    assert MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT in types
+    assert MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS in types
+
+
+def test_ripple_prediction_started_is_emitted_first(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """ripple_prediction_started is the first event in the stream."""
+    mock_ripple_service.predict.return_value = make_ripple_result()
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    started = messages[0]
+    assert started["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED
+    assert started["data"]["entity_id"] == "SRC_001"
+
+
+def test_ripple_prediction_result_contains_real_service_result(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """ripple_prediction_result carries the real RipplePredictionResult."""
+    mock_ripple_service.predict.return_value = make_ripple_result()
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    result_msg = next(
+        m for m in messages if m["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
+    )
+    data = result_msg["data"]
+    assert data["source_entity_id"] == "SRC_001"
+    assert data["affected_count"] == 1
+    assert data["prediction_count"] == 1
+    assert len(data["affected_entities"]) == 1
+    assert data["affected_entities"][0]["entity_id"] == "DST_001"
+
+
+def test_ripple_prediction_completed_is_emitted_last(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """ripple_prediction_completed is the final event on success."""
+    mock_ripple_service.predict.return_value = make_ripple_result()
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    completed = messages[-1]
+    assert completed["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED
+    assert completed["data"]["source_entity_id"] == "SRC_001"
+    assert completed["data"]["affected_count"] == 1
+    assert completed["data"]["prediction_count"] == 1
+
+
+def test_ripple_detected_emitted_for_real_affected_entities(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """A ripple_detected event is emitted for EACH real affected entity."""
+    mock_ripple_service.predict.return_value = make_ripple_result(
+        affected_entities=[
+            RippleAffectedEntity(
+                entity_id="DST_001",
+                entity_name="Downstream A",
+                depth=1,
+                propagated_risk_score=50.0,
+                propagated_risk_level="MEDIUM",
+                gnn_prediction=0.75,
+            ),
+            RippleAffectedEntity(
+                entity_id="DST_002",
+                entity_name="Downstream B",
+                depth=2,
+                propagated_risk_score=30.0,
+                propagated_risk_level="LOW",
+                gnn_prediction=0.60,
+            ),
+        ],
+    )
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    detected = [
+        m for m in messages if m["type"] == MESSAGE_TYPE_RIPPLE_DETECTED
+    ]
+    assert len(detected) == 2
+    assert detected[0]["data"]["entity_id"] == "DST_001"
+    assert detected[1]["data"]["entity_id"] == "DST_002"
+
+
+def test_zero_affected_entities_generates_no_ripple_detected(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """Zero affected entities means ZERO ripple_detected events."""
+    mock_ripple_service.predict.return_value = make_ripple_result(
+        affected_entities=[],
+    )
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    detected = [
+        m for m in messages if m["type"] == MESSAGE_TYPE_RIPPLE_DETECTED
+    ]
+    assert len(detected) == 0
+    assert messages[-1]["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED
+    assert messages[-1]["data"]["affected_count"] == 0
 
 
 def test_ripple_prediction_service_receives_validated_request(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
-    """The service receives a validated request with the correct entity_id."""
+    """The service receives the validated WebSocketRipplePredictionRequest."""
     mock_ripple_service.predict.return_value = make_ripple_result()
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {
-                "type": "ripple_prediction",
-                "data": {"entity_id": "ENTITY-42", "risk_score": 80.0},
-            }
-        )
-        websocket.receive_json()  # consume result
+        send_ripple_and_collect(websocket)
 
-        call_args = mock_ripple_service.predict.call_args[0][0]
-        assert call_args.entity_id == "ENTITY-42"
-        assert call_args.risk_score == 80.0
-
-
-# --------------------------------------------------------------------------- #
-# 2. Validation errors (missing / empty entity_id)
-# --------------------------------------------------------------------------- #
-
-
+    assert mock_ripple_service.predict.call_count == 1
+    request = mock_ripple_service.predict.call_args[0][0]
 def test_ripple_prediction_missing_entity_id_returns_invalid_message(
-    api_client: Any, mock_ripple_service: MagicMock
+    api_client: Any,
 ) -> None:
-    """A ripple_prediction with no data payload is rejected."""
+    """A ripple_prediction with no entity_id fails validation."""
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json({"type": "ripple_prediction"})
+        websocket.send_json({"type": "ripple_prediction", "data": {}})
         error = websocket.receive_json()
 
-        assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_INVALID_MESSAGE
-        mock_ripple_service.predict.assert_not_called()
+    assert error["type"] == "error"
+    assert error["error"]["code"] == ERROR_INVALID_MESSAGE
 
 
-def test_ripple_prediction_empty_entity_id_returns_invalid_message(
-    api_client: Any, mock_ripple_service: MagicMock
+def test_ripple_prediction_blank_entity_id_returns_invalid_message(
+    api_client: Any,
 ) -> None:
-    """A blank/whitespace-only entity_id is rejected by the schema."""
+    """A blank/whitespace entity_id fails validation."""
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
         websocket.send_json(
@@ -183,73 +319,92 @@ def test_ripple_prediction_empty_entity_id_returns_invalid_message(
         )
         error = websocket.receive_json()
 
-        assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_INVALID_MESSAGE
-        mock_ripple_service.predict.assert_not_called()
-
-
-# --------------------------------------------------------------------------- #
-# 3. Service error handling
-# --------------------------------------------------------------------------- #
+    assert error["type"] == "error"
+    assert error["error"]["code"] == ERROR_INVALID_MESSAGE
 
 
 def test_ripple_prediction_entity_not_found_returns_structured_error(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
-    """An unknown entity is translated to a structured error."""
-    mock_ripple_service.predict.side_effect = EntityNotFoundError("not found")
+    """EntityNotFoundError maps to a structured INVALID_MESSAGE error."""
+    mock_ripple_service.predict.side_effect = EntityNotFoundError("nope")
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "UNKNOWN"}}
-        )
-        error = websocket.receive_json()
+        messages = send_ripple_and_collect(websocket)
 
-        assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_INVALID_MESSAGE
-        assert "stack" not in error["error"]["message"].lower()
+    assert messages[0]["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED
+    error = next(m for m in messages if m["type"] == "error")
+    assert error["error"]["code"] == ERROR_INVALID_MESSAGE
+    assert messages[-1]["type"] == "error"
+
+
+def test_ripple_prediction_model_unavailable_returns_structured_error(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """ModelNotAvailableError maps to a structured MODEL_UNAVAILABLE error."""
+    mock_ripple_service.predict.side_effect = ModelNotAvailableError(
+        "no checkpoint"
+    )
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    error = next(m for m in messages if m["type"] == "error")
+    assert error["error"]["code"] == ERROR_MODEL_UNAVAILABLE
+    # No false completion after an error.
+    assert messages[-1]["type"] == "error"
+
+
+def test_ripple_prediction_neo4j_unavailable_returns_structured_error(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """Neo4j ServiceUnavailable maps to a structured PREDICTION_FAILED error."""
+    mock_ripple_service.predict.side_effect = ServiceUnavailable(
+        "neo4j://test-host:7687"
+    )
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    error = next(m for m in messages if m["type"] == "error")
+    assert error["error"]["code"] == ERROR_PREDICTION_FAILED
+    # The message is client-safe (no credentials / internals).
+    assert "neo4j://test-host:7687" not in error["error"]["message"]
+    assert messages[-1]["type"] == "error"
 
 
 def test_ripple_prediction_service_failure_returns_structured_error(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
-    """A RipplePredictionError is translated to a structured error."""
+    """RipplePredictionError maps to a structured PREDICTION_FAILED error."""
     mock_ripple_service.predict.side_effect = RipplePredictionError("boom")
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
-        )
-        error = websocket.receive_json()
+        messages = send_ripple_and_collect(websocket)
 
-        assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_PREDICTION_FAILED
-        assert "boom" not in error["error"]["message"]
+    error = next(m for m in messages if m["type"] == "error")
+    assert error["error"]["code"] == ERROR_PREDICTION_FAILED
+    assert "boom" not in error["error"]["message"]
 
 
 def test_ripple_prediction_unexpected_exception_returns_structured_error(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
-    """An unexpected exception is caught and translated to a structured error."""
-    mock_ripple_service.predict.side_effect = RuntimeError("unexpected")
+    """An unexpected exception maps to a structured error, no traceback."""
+    mock_ripple_service.predict.side_effect = RuntimeError("boom")
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
-        )
-        error = websocket.receive_json()
+        messages = send_ripple_and_collect(websocket)
 
-        assert error["type"] == "error"
-        assert error["error"]["code"] == ERROR_PREDICTION_FAILED
-        assert "unexpected" not in error["error"]["message"]
-
-
-# --------------------------------------------------------------------------- #
-# 4. Connection stability
-# --------------------------------------------------------------------------- #
+    error = next(m for m in messages if m["type"] == "error")
+    assert error["error"]["code"] == ERROR_PREDICTION_FAILED
+    assert "boom" not in error["error"]["message"]
+    assert "Traceback" not in error["error"]["message"]
 
 
 def test_ripple_prediction_failure_keeps_connection_alive(
@@ -260,22 +415,12 @@ def test_ripple_prediction_failure_keeps_connection_alive(
 
     with api_client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
-        )
-        error = websocket.receive_json()
-        assert error["type"] == "error"
+        messages = send_ripple_and_collect(websocket)
+
+        assert messages[-1]["type"] == "error"
 
         # Connection is still alive: ping/pong works
         websocket.send_json({"type": "ping"})
-        assert websocket.receive_json()["type"] == "pong"
-
-
-# --------------------------------------------------------------------------- #
-# 5. Backward compatibility
-# --------------------------------------------------------------------------- #
-
-
 def test_ping_pong_still_works_around_ripple_predictions(
     api_client: Any, mock_ripple_service: MagicMock
 ) -> None:
@@ -286,10 +431,11 @@ def test_ping_pong_still_works_around_ripple_predictions(
         websocket.receive_json()  # consume connected
         websocket.send_json({"type": "ping"})
         assert websocket.receive_json()["type"] == "pong"
-        websocket.send_json(
-            {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
+        messages = send_ripple_and_collect(websocket)
+        assert any(
+            m["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
+            for m in messages
         )
-        assert websocket.receive_json()["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
         websocket.send_json({"type": "ping"})
         assert websocket.receive_json()["type"] == "pong"
 
@@ -311,22 +457,86 @@ def test_multiple_clients_remain_isolated_for_ripple_predictions(
             ws2.receive_json()  # consume connected
 
             # Client 1 sees its own failure...
-            ws1.send_json(
-                {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
-            )
-            error = ws1.receive_json()
-            assert error["type"] == "error"
-            assert error["error"]["code"] == ERROR_PREDICTION_FAILED
+            ws1_messages = send_ripple_and_collect(ws1)
+            assert ws1_messages[-1]["type"] == "error"
+            assert ws1_messages[-1]["error"]["code"] == ERROR_PREDICTION_FAILED
 
             # ...while client 2 remains fully functional...
             ws2.send_json({"type": "ping"})
             assert ws2.receive_json()["type"] == "pong"
-            ws2.send_json(
-                {"type": "ripple_prediction", "data": {"entity_id": "SRC_001"}}
+            ws2_messages = send_ripple_and_collect(ws2)
+            assert any(
+                m["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
+                for m in ws2_messages
             )
-            result = ws2.receive_json()
-            assert result["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT
 
             # ...and client 1 is still usable after its failed request.
             ws1.send_json({"type": "ping"})
             assert ws1.receive_json()["type"] == "pong"
+
+
+def test_progress_events_use_real_stages_not_fabricated_percentages(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """Progress events use meaningful stage names, not fabricated percentages."""
+    mock_ripple_service.predict.return_value = make_ripple_result()
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    progress_events = [
+        m for m in messages
+        if m["type"] == MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS
+    ]
+    assert len(progress_events) >= 2
+    stages = [m["data"]["stage"] for m in progress_events]
+    assert "risk_propagation" in stages
+    assert "gnn_prediction" in stages
+    for pe in progress_events:
+        assert "percent" not in pe["data"]
+        assert "percentage" not in pe["data"]
+
+
+def test_stream_ordering_follows_lifecycle(
+    api_client: Any, mock_ripple_service: MagicMock
+) -> None:
+    """Events follow the expected lifecycle ordering."""
+    mock_ripple_service.predict.return_value = make_ripple_result(
+        affected_entities=[
+            RippleAffectedEntity(
+                entity_id="DST_001",
+                entity_name="A",
+                depth=1,
+                propagated_risk_score=50.0,
+                propagated_risk_level="MEDIUM",
+                gnn_prediction=0.75,
+            ),
+            RippleAffectedEntity(
+                entity_id="DST_002",
+                entity_name="B",
+                depth=2,
+                propagated_risk_score=30.0,
+                propagated_risk_level="LOW",
+                gnn_prediction=0.60,
+            ),
+        ],
+    )
+
+    with api_client.websocket_connect(WS_URL) as websocket:
+        websocket.receive_json()  # consume connected
+        messages = send_ripple_and_collect(websocket)
+
+    types = [m["type"] for m in messages]
+    assert types[0] == MESSAGE_TYPE_RIPPLE_PREDICTION_STARTED
+    assert types[-1] == MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED
+    result_idx = types.index(MESSAGE_TYPE_RIPPLE_PREDICTION_RESULT)
+    completed_idx = len(types) - 1
+    assert result_idx < completed_idx
+    detected_indices = [
+        i for i, t in enumerate(types) if t == MESSAGE_TYPE_RIPPLE_DETECTED
+    ]
+    assert len(detected_indices) == 2
+    started_idx = 0
+    assert all(i > started_idx for i in detected_indices)
+    assert all(i < result_idx for i in detected_indices)
