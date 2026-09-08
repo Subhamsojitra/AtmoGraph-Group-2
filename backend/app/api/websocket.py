@@ -34,6 +34,7 @@ import json
 import uuid
 from typing import Any
 
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
@@ -42,7 +43,9 @@ from app.schemas.websocket import (
     ERROR_INTERNAL,
     ERROR_INVALID_JSON,
     ERROR_INVALID_MESSAGE,
+    ERROR_MODEL_UNAVAILABLE,
     ERROR_NOT_SUPPORTED_YET,
+    ERROR_PREDICTION_FAILED,
     ERROR_UNSUPPORTED_MESSAGE_TYPE,
     MESSAGE_TYPE_PING,
     MESSAGE_TYPE_PREDICTION_REQUEST,
@@ -55,6 +58,7 @@ from app.schemas.websocket import (
     build_connected_message,
     build_error_message,
     build_pong_message,
+    build_ripple_prediction_result_message,
     summarize_validation_error,
 )
 from app.services.websocket_manager import (
@@ -62,10 +66,40 @@ from app.services.websocket_manager import (
     get_connection_manager,
 )
 from app.services.websocket_prediction import (
+    ModelNotAvailableError,
     PredictionService,
     get_websocket_prediction_service,
     run_websocket_prediction,
 )
+from app.services.ripple_prediction.ripple_prediction_service import (
+    RipplePredictionService,
+)
+from app.services.ripple_prediction.exceptions import (
+    EntityNotFoundError,
+    GNNPredictionError,
+    RipplePredictionError,
+    ServiceUnavailable,
+)
+
+# --------------------------------------------------------------------------- #
+# Dependency: RipplePredictionService (singleton, reused across connections)
+# --------------------------------------------------------------------------- #
+
+_ripple_prediction_service: Optional[RipplePredictionService] = None
+
+
+def get_ripple_prediction_service() -> RipplePredictionService:
+    """Provide the shared :class:`RipplePredictionService`.
+
+    A single service instance is reused across connections so the underlying
+    GraphService / RiskPropagationService / PredictionService (and their
+    Neo4j connections) are not duplicated per client.
+    """
+    global _ripple_prediction_service
+    if _ripple_prediction_service is None:
+        _ripple_prediction_service = RipplePredictionService()
+    return _ripple_prediction_service
+
 
 logger = get_logger(__name__)
 
@@ -131,10 +165,8 @@ def create_response_for_message(
         return message
 
     # A ripple_prediction request is validated here (Module 17). The actual
-    # ripple-effect processing is not implemented yet, so a valid request is
-    # answered with NOT_SUPPORTED_YET; an invalid payload is rejected with a
-    # structured INVALID_MESSAGE error. This keeps the transport pure and
-    # synchronous while enforcing the Module 17 request contract.
+    # ripple-effect processing is delegated to the route asynchronously:
+    # create_response_for_message stays pure and synchronous.
     if message.type == MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST:
         try:
             WebSocketRipplePredictionRequest(**(message.data or {}))
@@ -142,11 +174,7 @@ def create_response_for_message(
             return build_error_message(
                 ERROR_INVALID_MESSAGE, _summarize_validation_error(exc)
             )
-        return build_error_message(
-            ERROR_NOT_SUPPORTED_YET,
-            "Ripple prediction is recognized but the Module 17 "
-            "ripple-effect streaming pipeline is not implemented yet.",
-        )
+        return message
 
     try:
         return dispatch_message(message)
@@ -209,6 +237,142 @@ def _summarize_validation_error(exc: Exception) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Ripple prediction dispatcher (Module 17, Part 4)
+# --------------------------------------------------------------------------- #
+
+_ENTITY_NOT_FOUND_MESSAGE = (
+    "Ripple prediction failed: the requested entity was not found in the graph."
+)
+_NEO4J_UNAVAILABLE_MESSAGE = (
+    "Ripple prediction failed: the graph database is currently unavailable."
+)
+_PREDICTION_UNAVAILABLE_MESSAGE = (
+    "Ripple prediction failed: GNN prediction is currently unavailable."
+)
+_RIPPLE_PREDICTION_FAILED_MESSAGE = (
+    "Ripple prediction failed due to an unexpected server error."
+)
+
+
+async def run_ripple_prediction(
+    message: InboundWebSocketMessage,
+    ripple_service: RipplePredictionService,
+) -> dict[str, Any]:
+    """Run a ripple prediction request through the Module 17 service.
+
+    Pure orchestration: validates the payload, delegates the business logic
+    to :class:`RipplePredictionService`, and maps every failure to a
+    structured, client-safe WebSocket error. No ML / graph / propagation
+    logic lives here.
+
+    Args:
+        message: A validated ``InboundWebSocketMessage`` of type
+            ``ripple_prediction``.
+        ripple_service: The Module 17 ripple prediction service.
+
+    Returns:
+        Either a ``ripple_prediction_result`` envelope (on success) or a
+        structured ``error`` envelope (on any expected failure). The
+        WebSocket connection is never terminated by a failing request.
+    """
+    request = _build_ripple_request(message)
+    if isinstance(request, dict):
+        # Validation failed; request is already an error envelope.
+        return request
+
+    try:
+        result = ripple_service.predict(request)
+    except EntityNotFoundError as exc:
+        logger.info(
+            "WebSocket ripple prediction: entity not found",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_INVALID_MESSAGE, _ENTITY_NOT_FOUND_MESSAGE
+        )
+    except ServiceUnavailable as exc:
+        logger.error(
+            "WebSocket ripple prediction: Neo4j unavailable",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_PREDICTION_FAILED, _NEO4J_UNAVAILABLE_MESSAGE
+        )
+    except ModelNotAvailableError as exc:
+        logger.warning(
+            "WebSocket ripple prediction: GNN model not available",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_MODEL_UNAVAILABLE, _PREDICTION_UNAVAILABLE_MESSAGE
+        )
+    except GNNPredictionError as exc:
+        logger.error(
+            "WebSocket ripple prediction: GNN inference failed",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_PREDICTION_FAILED, _RIPPLE_PREDICTION_FAILED_MESSAGE
+        )
+    except RipplePredictionError as exc:
+        logger.error(
+            "WebSocket ripple prediction: service failure",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_PREDICTION_FAILED, _RIPPLE_PREDICTION_FAILED_MESSAGE
+        )
+    except Exception:
+        logger.error(
+            "WebSocket ripple prediction: unexpected failure", exc_info=True
+        )
+        return build_error_message(
+            ERROR_PREDICTION_FAILED, _RIPPLE_PREDICTION_FAILED_MESSAGE
+        )
+
+    try:
+        return build_ripple_prediction_result_message(result)
+    except Exception:
+        logger.error(
+            "WebSocket ripple prediction: response serialization failed",
+            exc_info=True,
+        )
+        return build_error_message(
+            ERROR_PREDICTION_FAILED, _RIPPLE_PREDICTION_FAILED_MESSAGE
+        )
+
+
+def _build_ripple_request(
+    message: InboundWebSocketMessage,
+) -> WebSocketRipplePredictionRequest | dict[str, Any]:
+    """Validate the message payload into a :class:`WebSocketRipplePredictionRequest`.
+
+    Returns a structured ``error`` envelope (as a dict) when the payload is
+    invalid; the route already validated it, so this is defense in depth.
+    """
+    data = message.data or {}
+    if not isinstance(data, dict):
+        return build_error_message(
+            ERROR_INVALID_MESSAGE,
+            "The 'data' payload of a ripple_prediction must be a JSON object.",
+        )
+    try:
+        return WebSocketRipplePredictionRequest(**data)
+    except ValidationError as exc:
+        return build_error_message(
+            ERROR_INVALID_MESSAGE, summarize_validation_error(exc)
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "WebSocket ripple prediction: invalid payload",
+            extra={"error": str(exc)},
+        )
+        return build_error_message(
+            ERROR_INVALID_MESSAGE, "Invalid ripple prediction payload."
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Route
 # --------------------------------------------------------------------------- #
 
@@ -219,8 +383,11 @@ async def websocket_endpoint(
     prediction_service: PredictionService = Depends(
         get_websocket_prediction_service
     ),
+    ripple_service: RipplePredictionService = Depends(
+        get_ripple_prediction_service
+    ),
 ) -> None:
-    """Serve the WebSocket transport at ``/api/v1/ws`` (Modules 15 & 16).
+    """Serve the WebSocket transport at ``/api/v1/ws`` (Modules 15, 16 & 17).
 
     Lifecycle:
 
@@ -230,6 +397,8 @@ async def websocket_endpoint(
            - ``ping`` is answered synchronously with ``pong``
            - a validated ``prediction_request`` triggers the (thread-pooled)
              Module 14 inference through the delegated dispatcher
+           - a validated ``ripple_prediction`` triggers the Module 17
+             ripple-effect pipeline through the delegated dispatcher
         4. on disconnect / unexpected failure: remove the client, then close
 
     One faulty client (bad JSON, unknown type, invalid prediction request,
@@ -249,12 +418,21 @@ async def websocket_endpoint(
             raw_text = await websocket.receive_text()
             response = create_response_for_message(raw_text)
             if isinstance(response, InboundWebSocketMessage):
-                # Valid prediction_request: run the existing prediction
-                # pipeline (blocking inference inside a worker thread) and
-                # send either the prediction_result or a structured error.
-                response = await run_websocket_prediction(
-                    response, prediction_service
-                )
+                if response.type == MESSAGE_TYPE_RIPPLE_PREDICTION_REQUEST:
+                    # Valid ripple_prediction: run the Module 17
+                    # ripple-effect pipeline and send either the
+                    # ripple_prediction_result or a structured error.
+                    response = await run_ripple_prediction(
+                        response, ripple_service
+                    )
+                else:
+                    # Valid prediction_request: run the existing prediction
+                    # pipeline (blocking inference inside a worker thread)
+                    # and send either the prediction_result or a structured
+                    # error.
+                    response = await run_websocket_prediction(
+                        response, prediction_service
+                    )
             await websocket.send_json(response)
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected", extra={"client_id": client_id})
