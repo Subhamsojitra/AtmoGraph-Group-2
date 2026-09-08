@@ -250,7 +250,7 @@ _PREDICTION_UNAVAILABLE_MESSAGE = (
     "Ripple prediction failed: GNN prediction is currently unavailable."
 )
 _RIPPLE_PREDICTION_FAILED_MESSAGE = (
-    "Ripple prediction failed due to an unexpected server error."
+    "Ripple prediction failed due to a server error."
 )
 
 
