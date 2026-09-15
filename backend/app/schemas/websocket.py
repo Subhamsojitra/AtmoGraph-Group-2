@@ -1,4 +1,4 @@
-"""Pydantic schemas for the WebSocket transport (Modules 15 & 16).
+"""Pydantic schemas for the WebSocket transport (Modules 15, 16 & 17).
 
 This module defines the minimal, stable wire contract used by the
 ``/api/v1/ws`` WebSocket endpoint.
@@ -6,18 +6,25 @@ This module defines the minimal, stable wire contract used by the
 Module 15 implements the connection lifecycle and the ``ping``/``pong``
 handshake. Module 16 adds the ML prediction streaming messages
 (``prediction_request`` / ``prediction_result``) on top of that unchanged
-transport. ``ripple_prediction`` remains a *reserved* Module 17 message.
+transport. Module 17 adds the ripple-effect prediction streaming lifecycle
+(``ripple_prediction`` request with ``ripple_prediction_started`` /
+``ripple_prediction_progress`` / ``ripple_detected`` /
+``ripple_prediction_result`` / ``ripple_prediction_completed`` events).
 
 Inbound (client -> server):
 
     {"type": "ping"}
     {"type": "prediction_request", "data": {"node_id": ..., "relationship_types": [...]}}
+    {"type": "ripple_prediction", "data": {"entity_id": ..., ...}}
 
 Outbound (server -> client):
 
     {"type": "connected", "data": {"client_id": ..., "protocol": ...}}
     {"type": "pong", "data": {"echo": ...}}
     {"type": "prediction_result", "data": {... PredictionResponse ...}}
+    {"type": "ripple_prediction_started|ripple_prediction_progress|"
+     "ripple_detected|ripple_prediction_result|"
+     "ripple_prediction_completed", "data": {...}}
     {"type": "error", "error": {"code": ..., "message": ...}}
 
 Validation is strict on purpose: unknown top-level fields are rejected (rather
@@ -483,6 +490,55 @@ def build_ripple_progress_message(
         type=MESSAGE_TYPE_RIPPLE_PREDICTION_PROGRESS, data=data
     ).model_dump(mode="json", exclude_none=True)
 
+
+def build_ripple_detected_message(entity: RippleAffectedEntity) -> dict[str, Any]:
+    """Build a ``ripple_detected`` message (Module 17).
+
+    Sent ONCE per real affected entity identified by the existing
+    :class:`RiskPropagationService`. The payload IS the structured
+    :class:`RippleAffectedEntity` — real propagated risk from Module 10 and the
+    real GNN prediction (when available) from Module 14. Nothing is invented
+    here.
+
+    Args:
+        entity: A :class:`RippleAffectedEntity` produced by
+            :class:`RipplePredictionService`.
+
+    Returns:
+        A JSON-serializable ``ripple_detected`` envelope.
+    """
+    return OutboundWebSocketMessage(
+        type=MESSAGE_TYPE_RIPPLE_DETECTED,
+        data=entity.model_dump(mode="json"),
+    ).model_dump(mode="json", exclude_none=True)
+
+
+def build_ripple_completed_message(
+    source_entity_id: str,
+    affected_count: int,
+    prediction_count: int,
+) -> dict[str, Any]:
+    """Build the ``ripple_prediction_completed`` message (Module 17).
+
+    Sent once after the ripple prediction lifecycle finishes successfully,
+    signaling to the client that no more events will follow for this request.
+
+    Args:
+        source_entity_id: The source entity identifier.
+        affected_count: Number of affected entities found.
+        prediction_count: Number of GNN predictions obtained.
+
+    Returns:
+        A JSON-serializable ``ripple_prediction_completed`` envelope.
+    """
+    return OutboundWebSocketMessage(
+        type=MESSAGE_TYPE_RIPPLE_PREDICTION_COMPLETED,
+        data={
+            "source_entity_id": source_entity_id,
+            "affected_count": affected_count,
+            "prediction_count": prediction_count,
+        },
+    ).model_dump(mode="json", exclude_none=True)
 
 
 def build_ripple_prediction_result_message(

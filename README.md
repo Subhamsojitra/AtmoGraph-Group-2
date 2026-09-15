@@ -768,15 +768,22 @@ async def main():
 asyncio.run(main())
 ```
 
-Message contract (Module 15 foundation / Module 16 prediction extension):
+Message contract (Module 15 foundation / Module 16 prediction extension /
+Module 17 ripple streaming):
 
 | Direction | Type | Payload | Notes |
 | --- | --- | --- | --- |
 | Client → Server | `ping` | optional `data` object | heartbeat / liveness check |
 | Client → Server | `prediction_request` | optional `data` object with `node_id` and/or `relationship_types` | Module 16: run the trained GNN over the current graph |
+| Client → Server | `ripple_prediction` | required `data` object with `entity_id` (plus optional `entity_name`, `risk_score`, `max_depth`, `attenuation`, `relationship_types`) | Module 17: stream the ripple effect of one entity through the supply chain |
 | Server → Client | `connected` | `client_id`, `protocol`, `supported_client_messages` | sent once, immediately after accept |
 | Server → Client | `pong` | `data.echo` = the ping's `data` (if any) | reply to a validated `ping` |
 | Server → Client | `prediction_result` | `data.predictions`, `data.prediction_count`, `data.timestamp` (the Module 14 `PredictionResponse`) | Module 16: reply to a validated `prediction_request` |
+| Server → Client | `ripple_prediction_started` | `data.entity_id` (+ `data.entity_name`, `data.risk_score` when resolved) | Module 17: first event of a ripple prediction lifecycle |
+| Server → Client | `ripple_prediction_progress` | `data.stage` (`risk_propagation` / `gnn_prediction`), `data.message` (+ `data.affected_count` when known) | Module 17: stage-based progress — never fabricated percentages |
+| Server → Client | `ripple_detected` | `data` = one real `RippleAffectedEntity` (`entity_id`, `depth`, `propagated_risk_score`, `propagated_risk_level`, `gnn_prediction`) | Module 17: emitted once per REAL affected entity |
+| Server → Client | `ripple_prediction_result` | `data` = the full `RipplePredictionResult` (Module 10 propagation + Module 14 GNN enrichment) | Module 17: final structured result |
+| Server → Client | `ripple_prediction_completed` | `data.source_entity_id`, `data.affected_count`, `data.prediction_count` | Module 17: last event of a successful lifecycle |
 | Server → Client | `error` | `error.code` + `error.message` | structured failure; connection stays usable |
 
 Error codes (stable, machine-readable):
@@ -786,7 +793,7 @@ Error codes (stable, machine-readable):
 | `INVALID_JSON` | The text frame is not valid JSON |
 | `INVALID_MESSAGE` | Not a JSON object, missing/invalid `type`, invalid prediction payload, or unknown fields |
 | `UNSUPPORTED_MESSAGE_TYPE` | Unknown message type |
-| `NOT_SUPPORTED_YET` | Recognized message reserved for the future Module 17 (`ripple_prediction`) |
+| `NOT_SUPPORTED_YET` | Recognized message type reserved for a future module. Kept for backward compatibility only — no types are currently reserved (Module 17's `ripple_prediction` is now supported), so this code is not emitted |
 | `MODEL_UNAVAILABLE` | No trained GNN model configured, or the configured checkpoint file is missing |
 | `PREDICTION_FAILED` | Empty/unusable graph, invalid/incompatible checkpoint or model, inference failure, Neo4j unavailable, or unexpected server error |
 | `NODE_NOT_FOUND` | The requested `node_id` has no prediction in the current graph |
@@ -798,14 +805,15 @@ Example session:
 CLIENT CONNECT
   ⇣
 SERVER: {"type":"connected","data":{"client_id":"…","protocol":1,
-         "supported_client_messages":["ping"]},"timestamp":"…"}
+         "supported_client_messages":["ping","prediction_request",
+         "ripple_prediction"]},"timestamp":"…"}
 CLIENT: {"type":"ping"}
   ⇣
 SERVER: {"type":"pong","timestamp":"…"}
 CLIENT: {"type":"nonsense"}
   ⇣
 SERVER: {"type":"error","error":{"code":"UNSUPPORTED_MESSAGE_TYPE",
-         "message":"Unsupported message type 'nonsense'. Supported types: ping."},
+         "message":"Unsupported message type 'nonsense'. Supported types: ping, prediction_request, ripple_prediction."},
          "timestamp":"…"}          # connection remains open
 CLIENT DISCONNECT                   # server stays healthy
 ```
@@ -822,8 +830,9 @@ Behaviour / contract:
   in-process registry of live clients and offers targeted `send_json` and
   `broadcast_json`; later modules reuse it to push prediction streams.
 * Connecting, pinging and validating messages require **no Neo4j and no GNN
-  model**. Only a validated `prediction_request` touches the Module 14
-  prediction pipeline (once per request, off the event loop).
+  model**. Only a validated `prediction_request` (Module 16) or
+  `ripple_prediction` (Module 17) touches the prediction pipelines (once per
+  request, off the event loop).
 
 Tests:
 
@@ -979,5 +988,158 @@ when it instead receives:
   the graph is empty);
 * any other `PREDICTION_FAILED` — graph/model inference failure (check the
   server logs).
+
+### Module 17 — Real-Time Ripple Prediction Streaming
+
+Module 17 adds real-time ripple-effect streaming to the same `/api/v1/ws`
+transport. The transport itself is unchanged; the only new client message is
+`ripple_prediction` with its streamed event lifecycle. The WebSocket layer only
+orchestrates and serializes — all business logic stays in the service layer.
+
+Architecture:
+
+```text
+Frontend
+   |  WebSocket request (ripple_prediction)
+   v
+FastAPI WebSocket  /api/v1/ws   (app.api.websocket — orchestration only)
+   |  validate payload (WebSocketRipplePredictionRequest)
+   |  emit lifecycle events as they are produced (async generator)
+   |  blocking service call moved to a worker thread (run_in_threadpool)
+   v
+RipplePredictionService  (Module 17, Part 3 — business logic)
+   |  entity resolution -> risk score resolution
+   v
+RiskPropagationService (Module 10)      PredictionService (Module 14)
+   |  actual graph propagation             actual GNN inference
+   v
+RipplePredictionResult -> streamed ripple_detected / result / completed events
+```
+
+Request (client → server):
+
+```json
+{
+  "type": "ripple_prediction",
+  "data": {
+    "entity_id": "supplier-001",
+    "entity_name": "Acme Components",
+    "risk_score": 72.5,
+    "max_depth": 3,
+    "attenuation": 0.8,
+    "relationship_types": ["SUPPLIES"]
+  }
+}
+```
+
+Only `entity_id` is required (the Module 8 resolved node id; missing, null or
+blank values fail validation). All other fields are optional: `risk_score`
+(0–100; when omitted the entity's persisted Module 9 risk score is used),
+`max_depth` (1–20 hops; defaults to the configured value), `attenuation`
+(0–1 per-hop factor; defaults to the configured value) and
+`relationship_types` (downstream traversal filter).
+
+Event lifecycle (server → client), in order:
+
+```text
+ripple_prediction_started      # request accepted, source info echoed
+ripple_prediction_progress     # stage "risk_propagation"
+ripple_detected                # one per REAL affected entity (zero or more)
+ripple_prediction_progress     # stage "gnn_prediction" (+ real affected_count)
+ripple_prediction_result       # the full structured result
+ripple_prediction_completed    # final summary; no more events for this request
+```
+
+The service call is synchronous, so the two `ripple_prediction_progress`
+events bracket the actual work — they are stage-based state reports, **never**
+fabricated percentages. `ripple_detected` events are emitted only for entities
+actually returned by the existing `RiskPropagationService`; if the propagation
+returns zero affected entities, zero `ripple_detected` events are sent
+(nothing is invented).
+
+Result payload (`ripple_prediction_result`) — `data` is exactly the
+`RipplePredictionResult` produced by `RipplePredictionService`:
+
+```json
+{
+  "type": "ripple_prediction_result",
+  "timestamp": "…",
+  "data": {
+    "source_entity_id": "supplier-001",
+    "source_entity_name": "Acme Components",
+    "source_risk_score": 72.5,
+    "propagated": true,
+    "affected_entities": [
+      {
+        "entity_id": "factory-007",
+        "entity_name": "Factory 7",
+        "depth": 1,
+        "propagated_risk_score": 58.0,
+        "propagated_risk_level": "high",
+        "gnn_prediction": 41.2
+      }
+    ],
+    "affected_count": 1,
+    "max_depth_reached": 1,
+    "prediction_count": 1,
+    "timestamp": "…"
+  }
+}
+```
+
+`gnn_prediction` is the real Module 14 GNN output for that entity, or `null`
+when the entity has no prediction in the current graph — no value is ever
+fabricated. `ripple_prediction_completed` reports the real `affected_count` /
+`prediction_count` from the same result.
+
+Error streaming (same `error` envelope as before; the connection stays
+usable):
+
+| Situation | Code |
+| --- | --- |
+| Missing/blank `entity_id` or invalid payload fields | `INVALID_MESSAGE` |
+| Source entity not found in the graph | `INVALID_MESSAGE` ("the requested entity was not found in the graph") |
+| Neo4j unavailable | `PREDICTION_FAILED` ("the graph database is currently unavailable") |
+| GNN checkpoint missing/unavailable | `MODEL_UNAVAILABLE` |
+| GNN inference / service failure / unexpected error | `PREDICTION_FAILED` |
+
+On failure after `ripple_prediction_started` the server sends exactly one
+structured `error` and stops the lifecycle — **no** fake
+`ripple_prediction_result` and **no** `ripple_prediction_completed` is sent,
+so a client can rely on `ripple_prediction_completed` meaning genuine success.
+Errors never contain stack traces, paths or credentials.
+
+Behaviour / contract:
+
+* The WebSocket layer owns only orchestration: receive → validate → emit
+  lifecycle events → invoke the service → serialize → map errors. Entity
+  resolution, propagation and GNN inference remain in the service layer
+  (`RipplePredictionService` → `RiskPropagationService` + `PredictionService`);
+  there is no second inference path and no checkpoint loading in the transport.
+* The blocking service call runs through `run_in_threadpool`, so one client's
+  ripple prediction never blocks other clients; every event is yielded and
+  sent as soon as it is produced.
+* `ping`/`pong`, `prediction_request`, invalid-JSON handling, unsupported-type
+  handling and multi-client isolation are unchanged and regression-tested.
+
+Tests (mocked service — no Neo4j / checkpoint / GPU required):
+
+```bash
+cd backend
+python -m pytest tests/test_websocket_ripple_prediction.py tests/test_websocket_ripple_lifecycle.py -q
+```
+
+Module 17 service-layer tests (entity resolution, propagation, GNN
+enrichment, result construction):
+
+```bash
+cd backend
+python -m pytest tests/test_ripple_prediction_service.py -q
+```
+
+Live E2E smoke test with real Neo4j + a real checkpoint: connect to
+`/api/v1/ws`, send `ripple_prediction` for a seeded entity (seed the graph as
+described in Module 16's smoke-test setup) and verify the full lifecycle
+above.
 
 

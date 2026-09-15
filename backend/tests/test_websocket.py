@@ -43,6 +43,11 @@ from app.schemas.websocket import (  # noqa: E402
     InboundWebSocketMessage,
     WebSocketRipplePredictionRequest,
     build_error_message,
+    build_ripple_completed_message,
+    build_ripple_detected_message,
+)
+from app.services.ripple_prediction.result_schema import (  # noqa: E402
+    RippleAffectedEntity,
 )
 from app.services.websocket_manager import (  # noqa: E402
     ConnectionManager,
@@ -227,15 +232,22 @@ def test_valid_ripple_prediction_request_is_dispatched() -> None:
     The transport validates the Module 17 request schema and dispatches a valid
     request to the ripple prediction service. Without a live Neo4j the service
     fails with a structured error (never a stack trace), and the connection
-    stays alive.
+    stays alive. With streaming, the lifecycle events (started, progress) are
+    emitted before the structured error.
     """
     with client.websocket_connect(WS_URL) as websocket:
         websocket.receive_json()  # consume connected
         websocket.send_json(
             {"type": "ripple_prediction", "data": {"entity_id": "supplier-001"}}
         )
-        error = websocket.receive_json()
-        assert error["type"] == "error"
+        # Consume the streaming lifecycle until the terminal error.
+        error = None
+        for _ in range(10):
+            msg = websocket.receive_json()
+            if msg.get("type") == "error":
+                error = msg
+                break
+        assert error is not None, "Expected a structured error in the stream"
         assert error["error"]["code"] != ERROR_NOT_SUPPORTED_YET
         assert "stack" not in error["error"]["message"].lower()
         assert "traceback" not in error["error"]["message"].lower()
@@ -402,6 +414,53 @@ def test_ripple_prediction_schema_model_dump_is_json_safe() -> None:
     dumped = request.model_dump(mode="json", exclude_none=True)
     assert dumped == {"entity_id": "supplier-001"}
     assert isinstance(dumped["entity_id"], str)
+
+
+def test_ripple_detected_builder_serializes_real_entity() -> None:
+    """build_ripple_detected_message serializes a real affected entity."""
+    entity = RippleAffectedEntity(
+        entity_id="DST_001",
+        entity_name="Downstream A",
+        depth=1,
+        propagated_risk_score=50.0,
+        propagated_risk_level="MEDIUM",
+        gnn_prediction=0.75,
+    )
+    msg = build_ripple_detected_message(entity)
+    assert msg["type"] == "ripple_detected"
+    assert msg["data"]["entity_id"] == "DST_001"
+    assert msg["data"]["entity_name"] == "Downstream A"
+    assert msg["data"]["depth"] == 1
+    assert msg["data"]["propagated_risk_score"] == 50.0
+    assert msg["data"]["propagated_risk_level"] == "MEDIUM"
+    assert msg["data"]["gnn_prediction"] == 0.75
+
+
+def test_ripple_detected_builder_without_prediction() -> None:
+    """A ripple_detected payload with no GNN prediction has gnn_prediction None."""
+    entity = RippleAffectedEntity(
+        entity_id="DST_001",
+        entity_name=None,
+        depth=2,
+        propagated_risk_score=30.0,
+        propagated_risk_level="LOW",
+        gnn_prediction=None,
+    )
+    msg = build_ripple_detected_message(entity)
+    assert msg["type"] == "ripple_detected"
+    assert msg["data"]["gnn_prediction"] is None
+    assert msg["data"]["entity_name"] is None
+
+
+def test_ripple_completed_builder_serializes_counts() -> None:
+    """build_ripple_completed_message carries the real counts."""
+    msg = build_ripple_completed_message(
+        source_entity_id="SRC_001", affected_count=3, prediction_count=2
+    )
+    assert msg["type"] == "ripple_prediction_completed"
+    assert msg["data"]["source_entity_id"] == "SRC_001"
+    assert msg["data"]["affected_count"] == 3
+    assert msg["data"]["prediction_count"] == 2
 
 
 def test_prediction_request_validation_unaffected_by_ripple_schema() -> None:
