@@ -15,10 +15,3 @@ env/
 .vscode/
 .idea/
 .DS_Store
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Trained model artifacts
-ml/models/*.pt

@@ -25,6 +25,7 @@ Notes
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,8 +41,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # it was launched from anywhere other than ``backend/`` (e.g. the repository
 # root).  Deriving the path from ``__file__`` makes configuration loading
 # independent of the current working directory.
-_BACKEND_DIR = Path(__file__).resolve().parents[2]  # .../backend
-_PROJECT_ROOT = _BACKEND_DIR.parent                # .../AtmoGraph-Group-2
+#
+# ``BACKEND_DIR`` is public for the same reason: other modules (e.g. the
+# prediction service resolving a relative ``PREDICTION_CHECKPOINT_PATH``) use
+# it so that configured relative paths never depend on the launch directory.
+BACKEND_DIR = Path(__file__).resolve().parents[2]    # .../backend
+_PROJECT_ROOT = BACKEND_DIR.parent                   # .../AtmoGraph-Group-2
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
 
@@ -74,6 +79,67 @@ class Settings(BaseSettings):
     neo4j_username: str
     neo4j_password: SecretStr
     neo4j_database: str
+
+    # ------------------------------------------------------------------ #
+    # NLP (Module 7 -- preprocessing & NER)
+    # ------------------------------------------------------------------ #
+    # The NER model is loaded lazily and cached by the service layer, so a
+    # missing model does not prevent the application from starting. The model
+    # package itself is installed out-of-band (see README) and is never
+    # downloaded automatically by the application or the test suite.
+    nlp_model_name: str = "dslim/bert-base-NER"
+    nlp_ner_max_length: int = 512
+    nlp_max_text_length: int = 10000
+    nlp_device: str = "cpu"
+    nlp_use_fast_tokenizer: bool = True
+
+    # ------------------------------------------------------------------ #
+    # Risk state update (Module 9)
+    # ------------------------------------------------------------------ #
+    # Risk scores use a 0-100 scale: 0 is the lowest/most benign risk and 100
+    # is the highest possible risk. Out-of-range values are rejected as invalid
+    # (never silently clamped).
+    #
+    # Risk levels are derived from the 0-100 score using the thresholds below.
+    # Those thresholds are a *configurable assumption* (documented in the
+    # README); they are NOT part of an official project specification yet, so
+    # they can be tuned via environment variables without code changes:
+    #
+    #   LOW      [0, 30]                 score < RISK_LEVEL_MEDIUM
+    #   MEDIUM   [31, 70]                score < RISK_LEVEL_HIGH
+    #   HIGH     [71, 90]                score < RISK_LEVEL_CRITICAL
+    #   CRITICAL [91, 100]               score >= RISK_LEVEL_CRITICAL
+    risk_score_min: float = 0.0
+    risk_score_max: float = 100.0
+    risk_level_medium: float = 31.0
+    risk_level_high: float = 71.0
+    risk_level_critical: float = 91.0
+
+    # ------------------------------------------------------------------ #
+    # Risk propagation / ripple effect (Module 10)
+    # ------------------------------------------------------------------ #
+    # Module 10 starts from a resolved entity that already carries a risk
+    # score (set by Module 9) and propagates that risk downstream through the
+    # supply-chain graph. The propagated risk of an entity at traversal depth
+    # ``d`` is ``source_score * attenuation ** d`` (clamped to the 0-100
+    # scale). These defaults are a *configurable assumption* until an official
+    # specification defines them; they can be tuned via environment variables
+    # without code changes.
+    risk_propagation_max_depth: int = 5
+    risk_propagation_attenuation: float = 0.5
+    risk_propagation_max_affected: int = 500
+
+    # ------------------------------------------------------------------ #
+    # GNN prediction / inference (Module 14)
+    # ------------------------------------------------------------------ #
+    # The prediction endpoint serves node-level downstream-delay values from
+    # the trained Module 12/13 GNN. It stays DISABLED (HTTP 503) until a
+    # trained checkpoint produced offline by Module 13 is configured below;
+    # checkpoints are never committed to Git and never downloaded
+    # automatically. These values are configurable assumptions (no official
+    # specification pins them) and can be tuned via environment variables.
+    prediction_checkpoint_path: Optional[str] = None
+    prediction_device: str = "cpu"
 
 
 #: Module-level singleton. Import this everywhere instead of instantiating
