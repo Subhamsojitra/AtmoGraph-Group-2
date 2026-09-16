@@ -62,6 +62,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to AtmoGraph",
+        "description": "Supply Chain Ripple Effect Predictor API",
+        "status": "running",
+        "docs": "/docs",
+    }
+
+
 app.include_router(entity_resolution_router, prefix=API_PREFIX)
 app.include_router(health_router, prefix=API_PREFIX)
 app.include_router(graph_router, prefix=API_PREFIX)
